@@ -1,0 +1,9 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP CPC1998J
+D Solid State Relays - PCB Mount SP AC Solid State Power Switch
+K
+F http://www.ixysic.com/home/pdfs.nsf/www/CPC1998.pdf/$file/CPC1998.pdf
+$ENDCMP
+#
+#End Doc Library
