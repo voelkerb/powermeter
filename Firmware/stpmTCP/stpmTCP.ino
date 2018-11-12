@@ -5,7 +5,7 @@
 
 // Serial Speed and DEBUG option
 #define SERIAL_SPEED 115200
-//#define DEBUG
+#define DEBUG
 //#define SERIAL_OUTPUT
 #define VERSION 0.8
 
@@ -13,6 +13,8 @@
 #define CMD_SWITCH_ON 's'
 #define CMD_SWITCH_OFF 'o'
 #define CMD_SWITCH_FOR 'f'
+#define CMD_START_STREAM 'm'
+#define CMD_STOP_STREAM 'n'
 #define CMD_START_SAMPLE 'a'
 #define CMD_STOP_SAMPLE 'p'
 #define CMD_RESET '?'
@@ -31,12 +33,12 @@ const int RELAY_PIN = 2;
 STPM stpm34(STPM_RES, STPM_CS, STPM_SYN);
 
 // Buffering stuff
-#define MEASURMENT_BYTES 18 //(16+2)
+#define MEASURMENT_BYTES 16 //(16+2)
 volatile float values[5] = {0};
 char buffer[MEASURMENT_BYTES] = {0};
-char dummy[MEASURMENT_BYTES] = "Alle meine Entc\n\r";
+char dummy[MEASURMENT_BYTES] = "Alle meine En\n\r";
 #define NUM_BUF 5
-#define BUF_SIZE 2048
+#define BUF_SIZE MEASURMENT_BYTES*128
 
 char buffer2[NUM_BUF][BUF_SIZE] = {};
 volatile int whichBufferRead = -1;
@@ -47,6 +49,7 @@ volatile uint16_t inBuffer = 0;
 const char* ssid =  "esewifi";
 const char* password =  "silkykayak943";
 WiFiServer server(54321);
+WiFiServer streamServer(54322);
 
 // TIMER stuff
 #define CLOCK 160 // clock frequency in MHz.
@@ -68,6 +71,7 @@ unsigned long postSampleCnt = 0;
 #define STATE_PRE 1
 #define STATE_ON 2
 #define STATE_POST 3
+#define STATE_STREAM 4
 volatile int state = STATE_IDLE;
 volatile unsigned long i = 0;
 volatile unsigned long j = 0;
@@ -79,8 +83,8 @@ volatile long freq = 0;
 
 void setup() {
    // Setup serial communication
+  Serial.begin(SERIAL_SPEED);
   #ifdef DEBUG
-    Serial.begin(SERIAL_SPEED);
     delay(300);
     Serial.print(F("Info:WIFI powermeter starting up. Version: "));
 
@@ -93,8 +97,8 @@ void setup() {
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, LOW);
 
-  buffer[16] = '\r';
-  buffer[17] = '\n';
+  //buffer[16] = '\r';
+  //buffer[17] = '\n';
   // Clear the buffer at beginning
   for (int i = 0; i < NUM_BUF; i++) {
     for (int j = 0; j < BUF_SIZE; j+=2) {
@@ -134,14 +138,17 @@ void setup() {
   #endif
   // Start the TCP server
   server.begin();
+  streamServer.begin();
 
   Serial.println(F("Info:Setup done"));
 }
 
 WiFiClient client;
+WiFiClient streamClient;
 
 // the loop routine runs over and over again forever:
 void loop() {
+
   // Output frequency
   if (freq != 0) {
     noInterrupts();
@@ -159,32 +166,59 @@ void loop() {
       client.println(response);
     }
   }
+  // Handle serial events
   if (Serial.available()) {
     serialEvent();
   }
+
+
   if (!client.connected()) {
-    // if (state == STATE_SAMPLE) {
-    //   // We lost connection to client, stop sampling
-    //   turnInterrupt(false);
-    //   state = STATE_IDLE;
-    // }
-    // try to connect to a new client
+    // Look for people connecting over the server
     client = server.available();
+    // We want that because we don't want each buffer part to be send immidiately
+    client.setNoDelay(false);
   } else {
+
     // read data from the connected client
     if (client.available() > 0) {
       tcpEvent();
+
     }
-    noInterrupts();
-    int whichBuffer = whichBufferRead;
-    whichBufferRead = -1;
-    interrupts();
-    if (whichBuffer != -1) {
-      //client.print("Heurika:");
-      //client.println(whichBufferRead);
-      client.write(&buffer2[whichBuffer][0], BUF_SIZE);
+    // if we are sampling, then pass the data over the to the client
+    if (state == STATE_SAMPLE) {
+      noInterrupts();
+      int whichBuffer = whichBufferRead;
+      whichBufferRead = -1;
+      interrupts();
+      if (whichBuffer != -1) {
+        for (int i = 0; i < BUF_SIZE; i += MEASURMENT_BYTES) {
+          client.write(&buffer2[whichBuffer][i], MEASURMENT_BYTES);
+          client.write("\r\n", 2);
+        }
+      }
+    // If we are streaming then pass data over connected users of the streaming server
+    } else if (state == STATE_STREAM) {
+      if (streamClient.connected()) {
+        noInterrupts();
+        int whichBuffer = whichBufferRead;
+        whichBufferRead = -1;
+        interrupts();
+        if (whichBuffer != -1) {
+          // Leave out \r\n over this connection
+          streamClient.write(&buffer2[whichBuffer][0], BUF_SIZE);
+        }
+      }
     }
   }
+
+
+  if (!streamClient.connected()) {
+    // Look for people connecting over the streaming server
+    streamClient = streamServer.available();
+    // TODO: Is this required?
+    streamClient.setNoDelay(true);
+  }
+
   yield();
 }
 
@@ -202,41 +236,11 @@ void ICACHE_RAM_ATTR sample_ISR(){
     freqCalcStart = freqCalcNow;
     i = 0;
   }
-  /*
-  // In
-  if (state == STATE_IDLE) {
-    return;
-  } else if (state == STATE_SAMPLE) {
-  // Wait for preduration, then switch relay
-  } else if (state == STATE_PRE) {
-    j++;
-    if (j == preSampleCnt) {
-      j = 0;
-      state = STATE_ON;
-      switchRelay(RELAY_PIN, true);
-    }
-  } else if (state == STATE_ON) {
-    j++;
-    if (j == sampleCnt) {
-      j = 0;
-      state = STATE_POST;
-      switchRelay(RELAY_PIN, false);
-    }
-  } else if (state == STATE_POST) {
-    j++;
-    if (j == postSampleCnt) {
-      j = 0;
-      state = STATE_IDLE;
-    }
-  }
-  // This is way too slow...
-  */
+
   stpm34.readVoltageAndCurrent(1, (float*) &values[0], (float*) &values[1]);
   values[2] = stpm34.readActivePower(1);
   values[3] = stpm34.readReactivePower(1);
-  memcpy(&buffer[0], (void*)&values[0], 16);
-  memcpy(&buffer2[whichBufferWrite][inBuffer], &buffer[0], MEASURMENT_BYTES);
-  //memcpy(&buffer2[whichBufferWrite][inBuffer], &dummy[0], 18);
+  memcpy(&buffer2[whichBufferWrite][inBuffer], (void*)&values[0], MEASURMENT_BYTES);
   inBuffer += MEASURMENT_BYTES;
   if (inBuffer > BUF_SIZE-MEASURMENT_BYTES) {
     inBuffer = 0;
@@ -245,7 +249,8 @@ void ICACHE_RAM_ATTR sample_ISR(){
   }
 
   #ifdef SERIAL_OUTPUT
-  Serial.write(buffer, 18);
+  Serial.write(buffer, MEASURMENT_BYTES);
+  Serial.println("");
   #endif
   now = ESP.getCycleCount();
   if (next > now) {
@@ -293,6 +298,14 @@ String handleCommand(char c) {
       break;
     case CMD_SWITCH_OFF:
       switchRelay(RELAY_PIN, false);
+      break;
+    case CMD_START_STREAM:
+      state = STATE_STREAM;
+      turnInterrupt(true);
+      break;
+    case CMD_STOP_STREAM:
+      turnInterrupt(false);
+      state = STATE_IDLE;
       break;
     case CMD_START_SAMPLE:
       state = STATE_SAMPLE;
