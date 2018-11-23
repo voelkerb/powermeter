@@ -5,23 +5,27 @@
 #define DEBUG
 
 // Pins for STPM34 SPI Connection
-const int STPM_CS = 8;
-const int STPM_SYN = 9;
+// const int STPM_CS = 8;
+// const int STPM_SYN = 9;
+// // Reset pin of STPM
+// const int STPM_RES = 7;
+const int STPM_CS = 15;
+const int STPM_SYN = 4;
 // Reset pin of STPM
-const int STPM_RES = 7;
+const int STPM_RES = 5;
 
 // STPM Object
 STPM stpm34(STPM_RES, STPM_CS, STPM_SYN);
 
 void setup() {
   // Begin Serial Communication
-  Serial.begin(SERIAL_SPEED);           
+  Serial.begin(SERIAL_SPEED);
 
   // Init STPM device (set pins, configure etc)
   stpm34.init();
-  
+
   delay(2000);
-  
+
   Serial.println("Setup done");
 }
 
@@ -63,6 +67,5 @@ void loop() {
   Serial.print("\taP: ");
   Serial.print(activePower);
   Serial.println("");
+  delay(100);
 }
-
-

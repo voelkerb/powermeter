@@ -2,9 +2,9 @@
  Library for getting energy-data out of a STPM3X.
  See example file to get an idea of how to use this
  class.
- 
+
  Feel free to use the code as it is.
- 
+
  Benjamin Völker, voelkerb@me.com
  Embedded Systems
  University of Freiburg, Institute of Informatik
@@ -23,7 +23,7 @@
 #endif
 
 //#define DEBUG
-//#define DEBUG_DEEP
+#define DEBUG_DEEP
 
 
 #define STPM3x_FRAME_LEN 5
@@ -90,7 +90,7 @@ class STPM {
     inline int32_t buffer15to32(uint8_t *buffer);
     inline int16_t buffer16to30(uint8_t *buffer);
     inline int16_t buffer16to27(uint8_t *buffer);
-    
+
     inline void latch();
 
     int RESET_PIN;

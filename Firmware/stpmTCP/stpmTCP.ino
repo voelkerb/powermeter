@@ -113,6 +113,12 @@ void setup() {
   #endif
   stpm34.init();
   #ifdef DEBUG
+
+    stpm34.readVoltageAndCurrent(1, (float*) &values[0], (float*) &values[1]);
+    Serial.print(F("Info:Voltage: "));
+    Serial.println(values[0]);
+    Serial.print(F("Info:Current: "));
+    Serial.println(values[1]);
     Serial.println(F("Info:Connected to STPM"));
   #endif
 
@@ -249,7 +255,9 @@ void ICACHE_RAM_ATTR sample_ISR(){
   }
 
   #ifdef SERIAL_OUTPUT
-  Serial.write(buffer, MEASURMENT_BYTES);
+  Serial.print(values[0]);
+  Serial.print(", ");
+  Serial.print(values[1]);
   Serial.println("");
   #endif
   now = ESP.getCycleCount();
