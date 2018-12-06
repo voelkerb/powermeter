@@ -2,6 +2,8 @@
 #include "STPM_mod.h"
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h>
+#include <WiFiUdp.h>
+#include <time.h>
 
 // Serial Speed and DEBUG option
 #define SERIAL_SPEED 115200
@@ -13,6 +15,7 @@
 #define CMD_SWITCH_ON 's'
 #define CMD_SWITCH_OFF 'o'
 #define CMD_SWITCH_FOR 'f'
+#define CMD_START_STREAM_AT 't'
 #define CMD_START_STREAM 'm'
 #define CMD_STOP_STREAM 'n'
 #define CMD_START_SAMPLE 'a'
@@ -28,6 +31,11 @@ const int STPM_RES = 5;
 
 // Pins for 230V Relay
 const int RELAY_PIN = 2;
+
+time_t currentTime;
+time_t currentTimeMs;
+time_t sampleTime;
+time_t sampleTimeMs;
 
 // STPM Object
 STPM stpm34(STPM_RES, STPM_CS, STPM_SYN);
@@ -80,6 +88,14 @@ volatile unsigned long k = 0;
 volatile long freqCalcStart;
 volatile long freqCalcNow;
 volatile long freq = 0;
+
+IPAddress timeServerIP; // time.nist.gov NTP server address
+const char* ntpServerName = "0.de.pool.ntp.org";
+unsigned int localNTPPort = 2390; // local port to listen for UDP packets
+const int NTP_PACKET_SIZE = 48; // NTP time stamp is in the first 48 bytes
+byte ntpBuffer[NTP_PACKET_SIZE]; //buffer to hold incoming and outgoing
+// A UDP instance to let us send and receive packets over UDP
+WiFiUDP udp;
 
 void setup() {
    // Setup serial communication
@@ -146,6 +162,9 @@ void setup() {
   server.begin();
   streamServer.begin();
 
+  udp.begin(localNTPPort);
+  // configTime(0, 0, "0.de.pool.ntp.org");
+  // configTime(2 * 3600, 0, "pool.ntp.org", "time.nist.gov");
   Serial.println(F("Info:Setup done"));
 }
 
@@ -273,7 +292,7 @@ void serialEvent() {
   if (!Serial.available()) return;
   char c = Serial.read();
   if (c == ' ' || c == '\n' || c == '\r') return;
-  String response = handleCommand(c);
+  String response = handleCommand(c, Serial);
   Serial.println(response);
 }
 
@@ -282,13 +301,83 @@ void tcpEvent() {
   char c = client.read();
   if (c == ' ' || c == '\n' || c == '\r') return;
   Serial.println(c);
-  String response = handleCommand(c);
+  String response = handleCommand(c, client);
   Serial.println(response);
   client.println(response);
   //client.write(buffer, 18);
 }
 
-String handleCommand(char c) {
+
+// send an NTP request to the time server at the given address
+unsigned long sendNTPpacket(IPAddress& address) {
+  Serial.println("Sending NTP packet...");
+  // Reset all bytes in the buffer to 0
+  memset(ntpBuffer, 0, NTP_PACKET_SIZE);
+  // Initialize values needed to form NTP request
+  ntpBuffer[0] = 0b11100011; // LI, Version, Mode
+  ntpBuffer[1] = 0; // Stratum, or type of clock
+  ntpBuffer[2] = 6; // Polling Interval
+  ntpBuffer[3] = 0xEC; // Peer Clock Precision
+  // 8 bytes of zero for Root Delay & Root Dispersion
+  ntpBuffer[12]  = 49;
+  ntpBuffer[13]  = 0x4E;
+  ntpBuffer[14]  = 49;
+  ntpBuffer[15]  = 52;
+  // all NTP fields have been given values, now
+  // you can send a packet requesting a timestamp:
+  udp.beginPacket(address, 123); //NTP requests are to port 123
+  udp.write(ntpBuffer, NTP_PACKET_SIZE);
+  udp.endPacket();// should flush
+}
+
+bool getTime() {
+  WiFi.hostByName(ntpServerName, timeServerIP);
+  sendNTPpacket(timeServerIP);
+  long start = millis();
+  // Wait for packet to arrive
+  delay(1000);
+  int cb = udp.parsePacket();
+  if (!cb) {
+    Serial.println("No NTP response yet");
+    return false;
+  } else {
+    Serial.print("received NTP packet, length=");
+    Serial.println(cb);
+    // We've received a packet, read the data from it
+    udp.read(ntpBuffer, NTP_PACKET_SIZE);
+    // read the packet into the buf
+    unsigned long highWord = word(ntpBuffer[40], ntpBuffer[41]);
+    unsigned long lowWord = word(ntpBuffer[42], ntpBuffer[43]);
+    // combine the four bytes (two words) into a long integer
+    // this is NTP time (seconds since Jan 1 1900):
+    unsigned long secsSince1900 = highWord << 16 | lowWord;
+    uint32_t frac  = (uint32_t) ntpBuffer[44] << 24
+               | (uint32_t) ntpBuffer[45] << 16
+               | (uint32_t) ntpBuffer[46] <<  8
+               | (uint32_t) ntpBuffer[47] <<  0;
+    uint16_t mssec = ((uint64_t) frac *1000) >> 32;
+    currentTimeMs = mssec;
+    // Unix time starts on Jan 1 1970. In seconds, that's 2208988800:
+    // subtract seventy years:
+    unsigned long epoch = secsSince1900 - 2208988800UL;
+    // Add the time we waited
+    long deviation = millis() - start;
+    currentTime = epoch + deviation/1000;
+    currentTimeMs = mssec + deviation%1000;
+    return true;
+  }
+  // Serial.print("Waiting for time");
+  // currentTime = 0;
+  // while (!currentTime) {
+  //   currentTime = time(nullptr);
+  //   Serial.print(".");
+  //   delay(100);
+  // }
+  // Serial.println("");
+  // Serial.println(ctime(&currentTime));
+}
+
+String handleCommand(char c, Stream &getter) {
   String response = "";
   switch (c) {
     case CMD_RESET:
@@ -311,6 +400,59 @@ String handleCommand(char c) {
       state = STATE_STREAM;
       turnInterrupt(true);
       break;
+    case CMD_START_STREAM_AT: {
+      getTime();
+      long start = millis();
+
+      Serial.print("Current time: ");
+      Serial.print(currentTime);
+      Serial.print(".");
+      Serial.println(currentTimeMs);
+      Serial.println(ctime(&currentTime));
+      sampleTime = parseTime(getter);
+      sampleTimeMs = parseTime(getter);
+      while (getter.available()) getter.read();
+      while (sampleTimeMs > 1000) sampleTimeMs /= 10;
+
+      Serial.print("Start to sample at: ");
+      Serial.print(sampleTime);
+      Serial.print(".");
+      Serial.println(sampleTimeMs);
+      Serial.println(ctime(&sampleTime));
+
+      time_t delta = sampleTime-currentTime;
+
+      int deltaMs = sampleTimeMs-currentTimeMs;
+
+      time_t deltaInMs = delta*1000 + deltaMs;
+
+      Serial.print("We have to wait: ");
+      Serial.print(deltaInMs);
+      Serial.println(" ms");
+      if (deltaInMs > 10000) {
+        Serial.println("Sampling has to start after at least 10s");
+      } else if (deltaInMs < 0) {
+        Serial.println("Time is in the past");
+      } else if (millis() - start > deltaInMs) {
+        Serial.println("Give us at least 2s to prepare");
+      } else {
+        long ctdTimer = millis();
+        long ctd = (deltaInMs - (millis() - start)) / 1000;
+        while(millis() - start < (long)deltaInMs) {
+          if ((millis() - ctdTimer) > 1000) {
+            Serial.println(ctd);
+            getter.println(ctd);
+            ctd -= 1;
+            ctdTimer = millis();
+          }
+          yield();
+        }
+        Serial.println("Start Sampling");
+        state = STATE_STREAM;
+        turnInterrupt(true);
+      }
+      break;
+    }
     case CMD_STOP_STREAM:
       turnInterrupt(false);
       state = STATE_IDLE;
@@ -327,9 +469,9 @@ String handleCommand(char c) {
       delay(10);
       turnInterrupt(false);
       state = STATE_PRE;
-      preSampleCnt = parseDuration();
-      sampleCnt = parseDuration();
-      postSampleCnt = parseDuration();
+      preSampleCnt = parseValue(getter);
+      sampleCnt = parseValue(getter);
+      postSampleCnt = parseValue(getter);
       response = "Info:Switching for: ";
       response += preSampleCnt;
       response += ", ";
@@ -355,18 +497,44 @@ void turnInterrupt(bool on) {
   sei();
 }
 
-long parseDuration() {
-  long duration = 0;
-  while(true) {
-    int i = Serial.read() - '0';
-    if (i < 0 || i > 9) break;
-    else {
-      duration *= 10;
-      duration += i;
+time_t parseTime(Stream &getter) {
+  time_t value = 0;
+  long timeOut = millis();
+  while(millis() - timeOut < 50) {
+    if (getter.available()) {
+      int i = getter.read() - '0';
+      if (i < 0 || i > 9) break;
+      else {
+        value = value*10 + i;
+      }
+      timeOut = millis();
     }
   }
-  return duration;
+  return value;
 }
+
+
+
+/****************************************************
+ * Parse a long value given any stream object.
+ * Checks stream.available and returns after timeout
+ ****************************************************/
+long parseValue(Stream &getter) {
+  long value = 0;
+  long timeOut = millis();
+  while(millis() - timeOut < 50) {
+    if (getter.available()) {
+      int i = getter.read() - '0';
+      if (i < 0 || i > 9) break;
+      else {
+        value = value*10 + i;
+      }
+      timeOut = millis();
+    }
+  }
+  return value;
+}
+
 
 inline void switchRelay(int number, bool value) {
   digitalWrite(number, value);
