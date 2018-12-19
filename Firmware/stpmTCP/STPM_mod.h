@@ -22,12 +22,13 @@
 #include "WProgram.h"
 #endif
 
-//#define DEBUG
-#define DEBUG_DEEP
+#define DEBUG
+//#define DEBUG_DEEP
 
 
 #define STPM3x_FRAME_LEN 5
 #define CRC_8 (0x07)
+#define SPI_LATCH // Latching with SPI
 
 enum Gain { twoX=0x00, fourX=0x01, eightX=0x02, sixteenX=0x03};
 
@@ -37,7 +38,7 @@ class STPM {
     STPM(int resetPin, int csPin);
     void init();
     void setCurrentGain(uint8_t channel, Gain gain);
-    void readAll();
+    void readAll(uint8_t channel, float *voltage, float *current, float* active, float* reactive);
     float readTotalActiveEnergy();
     float readTotalFundamentalEnergy();
     float readTotalReactiveEnergy();
@@ -56,15 +57,15 @@ class STPM {
     float readMomentaryFundamentalPower(uint8_t channel);
     void readVoltageAndCurrent(uint8_t channel, float* voltage, float* current);
     float readVoltage(uint8_t channel);
-    float readVoltage32();
     float readCurrent(uint8_t channel);
-    float readCurrent32();
     float readFundamentalVoltage(uint8_t channel);
     void readRMSVoltageAndCurrent(uint8_t channel, float* voltage, float* current);
     void readVoltageSagAndSwellTime(uint8_t channel, float* sag, float* swell);
     void readCurrentPhaseAndSwellTime(uint8_t channel, float* phase, float* swell);
     void readPeriods(float* ch1, float* ch2);
     void latchReg();
+    void autoLatch(bool enabled);
+    void CRC(bool enabled);
 
   private:
     void Init_STPM34();
@@ -98,6 +99,8 @@ class STPM {
     int SYN_PIN;
     u8 CRC_u8Checksum;
     u8 address;
+    bool _autoLatch;
+    bool _crcEnabled;
     uint8_t readBuffer[10];
 
 };

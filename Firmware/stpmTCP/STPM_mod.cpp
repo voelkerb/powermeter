@@ -28,6 +28,53 @@ DSP_CR301bits_t DSP_CR301bits;
 DSP_CR500bits_t DSP_CR500bits;
 
 
+
+STPM::STPM(int resetPin, int csPin, int synPin) {
+  RESET_PIN = resetPin;
+  CS_PIN = csPin;
+  SYN_PIN = synPin;
+  _autoLatch = true;
+  _crcEnabled = true;
+}
+
+STPM::STPM(int resetPin, int csPin) {
+  RESET_PIN = resetPin;
+  CS_PIN = csPin;
+  SYN_PIN = -1;
+  _autoLatch = true;
+  _crcEnabled = true;
+}
+
+void STPM::init() {
+  pinMode(CS_PIN, OUTPUT);
+  if (SYN_PIN != -1) pinMode(SYN_PIN, OUTPUT);
+  pinMode(RESET_PIN, OUTPUT);
+  digitalWrite(CS_PIN, LOW);
+  digitalWrite(RESET_PIN, LOW);
+  delay(35);
+  digitalWrite(RESET_PIN, HIGH);
+  delay(35);
+  digitalWrite(CS_PIN, HIGH);
+  // Init sequence by togling 3 times syn pin
+  if (SYN_PIN != -1) {
+    for (int i = 0; i < 3; i++) {
+      digitalWrite(SYN_PIN, LOW);
+      delay(2);
+      digitalWrite(SYN_PIN, HIGH);
+      delay(2);
+    }
+  }
+  digitalWrite(CS_PIN, LOW);
+  delay(5);
+  digitalWrite(CS_PIN, HIGH);
+  SPI.begin();
+  SPI.beginTransaction(SPISettings(8000000, MSBFIRST, SPI_MODE2));
+  Init_STPM34();
+  #ifdef DEBUG_DEEP
+	Serial.println(F("End Init"));
+  #endif
+}
+
 void STPM::Init_STPM34() {
   #ifdef DEBUG_DEEP
 	Serial.println(F("Start Init_STPM34"));
@@ -35,7 +82,9 @@ void STPM::Init_STPM34() {
   u8 readAdd, writeAdd, dataLSB, dataMSB;
 
   //set Voltage Reference
+  #ifdef DEBUG
   Serial.println(F("Info:Set DSP Control Register 1 LSW"));
+  #endif
   DSP_CR100bits.ENVREF1 = 1;       //enable internal Vref1 bit for CH0;
   DSP_CR100bits.TC1 = 0x02;         //set temperature compensation for CH0; Vref1=1.18v default
   readAdd = 0x00;
@@ -44,7 +93,9 @@ void STPM::Init_STPM34() {
   dataMSB = DSP_CR100bits.MSB;
   sendFrameCRC(0x00, 0x00, dataLSB, dataMSB); //write to  CR1 register
 
+  #ifdef DEBUG
   Serial.println(F("Info:Set DSP Control Register 1 MSW"));
+  #endif
   DSP_CR101bits.BHPFV1 = 0;//1;//0;        //HPF enable voltage;DC cancellation
   DSP_CR101bits.BHPFC1 = 0;//1;//0;        //HPF enable current;DC cancellation
   DSP_CR101bits.BLPFV1 = 1;        //LPF wideband voltage;set up fundamental mode
@@ -56,7 +107,9 @@ void STPM::Init_STPM34() {
   dataMSB = DSP_CR101bits.MSB;
   sendFrameCRC(readAdd, writeAdd, dataLSB, dataMSB); //write to  CR1 register
 
+  #ifdef DEBUG
   Serial.println(F("Info:Set DSP Control Register 2 LSW"));
+  #endif
   DSP_CR200bits.ENVREF2 = 1;       //enable internal Vref1 bit for CH1;
   DSP_CR200bits.TC2 = 0x02;        //set temperature compensation for CH1;  Vref2=1.18v default
   readAdd = 0x01;
@@ -65,7 +118,9 @@ void STPM::Init_STPM34() {
   dataMSB = DSP_CR200bits.MSB;
   sendFrameCRC(readAdd, writeAdd, dataLSB, dataMSB); //write to  CR2 register
 
+  #ifdef DEBUG
   Serial.println(F("Info:Set DSP Control Register 2 MSW"));
+  #endif
   DSP_CR201bits.BHPFV2 = 0;//1;//0;        //HPF enable voltage;DC cancellation
   DSP_CR201bits.BHPFC2 = 0;//1;//0;        //HPF enable current;DC cancellation
   DSP_CR201bits.BLPFV2 = 1;        //LPF bypassed -  wideband voltage;set up fundamental mode
@@ -78,19 +133,11 @@ void STPM::Init_STPM34() {
   sendFrameCRC(readAdd, writeAdd, dataLSB, dataMSB);
 
   // Set current gain: 0x00 = 2, 0x01 = 4, 0x02 = 8, 0x03 = 16
-
   setCurrentGain(1, sixteenX);
   setCurrentGain(2, sixteenX);
 
-  Serial.println(F("Info:Set DSP Control Register 3 LSW"));
-  Serial.println(F("Info:Turn automatic measurement latching on"));
-  DSP_CR301bits.SWAuto_Latch = 1;      // Automatic measurement register latch at 7.8125 kHz
-  readAdd = 0x05;
-  writeAdd = 0x05;
-  dataMSB = DSP_CR301bits.MSB;
-  dataLSB = DSP_CR301bits.LSB;
-  sendFrameCRC(readAdd, writeAdd, dataLSB, dataMSB);
 
+  #ifdef DEBUG
   Serial.println(F("Info:GAIN (Bit 26/27):"));
   // Read Gain
   readFrame(0x18, readBuffer);
@@ -103,88 +150,104 @@ void STPM::Init_STPM34() {
   printRegister(readBuffer, "LPW1:");
   readFrame(0x01, readBuffer);
   printRegister(readBuffer, "LPW2:");
+  #endif
 
-  US1_REG100bits.CRC_EN=0;         //disable CRC polynomial
-  readAdd=0x24;
-  writeAdd=0x24;
-  dataMSB=US1_REG100bits.MSB;
-  dataLSB=US1_REG100bits.LSB;
-  sendFrameCRC(readAdd,writeAdd,dataLSB,dataMSB);
+  autoLatch(false);
+  CRC(false);
 
   #ifdef DEBUG_DEEP
 	Serial.println(F("End Init_STPM34"));
   #endif
 }
 
-
-
-STPM::STPM(int resetPin, int csPin, int synPin) {
-  RESET_PIN = resetPin;
-  CS_PIN = csPin;
-  SYN_PIN = synPin;
-}
-
-STPM::STPM(int resetPin, int csPin) {
-  RESET_PIN = resetPin;
-  CS_PIN = csPin;
-  SYN_PIN = -1;
-}
-
-void STPM::init() {
-
-  #ifdef DEBUG_DEEP
-	Serial.println(F("Start Init"));
-	Serial.println(CS_PIN);
-  #endif
-    pinMode(CS_PIN, OUTPUT);
-  #ifdef DEBUG_DEEP
-	Serial.println(F("Init point 0"));
-	Serial.println(SYN_PIN);
-  #endif
-  if (SYN_PIN != -1) pinMode(SYN_PIN, OUTPUT);
-  pinMode(RESET_PIN, OUTPUT);
-  #ifdef DEBUG_DEEP
-	Serial.println(F("Init point 1"));
-  #endif
-  digitalWrite(CS_PIN, LOW);
-  digitalWrite(RESET_PIN, LOW);
-  delay(35);
-  digitalWrite(RESET_PIN, HIGH);
-  delay(35);
-  digitalWrite(CS_PIN, HIGH);
-  #ifdef DEBUG_DEEP
-	Serial.println(F("Init point 2"));
-  #endif
-  // Init sequence by togling 3 times syn pin
-  if (SYN_PIN != -1) {
-    for (int i = 0; i < 3; i++) {
-      digitalWrite(SYN_PIN, LOW);
-      delay(2);
-      digitalWrite(SYN_PIN, HIGH);
-      delay(2);
-    }
+void STPM::CRC(bool enabled) {
+  if (_crcEnabled == enabled) return;
+  // Disable CRC
+  if (!enabled) {
+    #ifdef DEBUG
+    Serial.println(F("Info:Disable CRC"));
+    #endif
+    US1_REG100bits.CRC_EN=0;         //disable CRC polynomial
+    sendFrameCRC(0x24,0x24,US1_REG100bits.LSB,US1_REG100bits.MSB);
+  // Enable CRC
+  } else {
+    #ifdef DEBUG
+    Serial.println(F("Info:Enable CRC"));
+    #endif
+    US1_REG100bits.CRC_EN=1;         //disable CRC polynomial
+    sendFrame(0x24,0x24,US1_REG100bits.LSB,US1_REG100bits.MSB);
   }
-  #ifdef DEBUG_DEEP
-	Serial.println(F("Init point 3"));
-  #endif
-  digitalWrite(CS_PIN, LOW);
-  delay(5);
-  digitalWrite(CS_PIN, HIGH);
-  SPI.begin();
-  SPI.beginTransaction(SPISettings(8000000, MSBFIRST, SPI_MODE3));
-  // Delay to init spi
-  delay(10);
-  Init_STPM34();
-  #ifdef DEBUG_DEEP
-	Serial.println(F("End Init"));
-  #endif
+  _crcEnabled = enabled;
 }
 
 
-void STPM::readAll() {
+void STPM::autoLatch(bool enabled) {
   #ifdef DEBUG
-  Serial.println(F("Info:Read all: Doing nothing"));
+  Serial.println(F("Info:Set DSP Control Register 3 LSW"));
+  if (enabled) {
+    Serial.println(F("Info:Automatic latching"));
+  } else {
+    Serial.println(F("Info:Manual latching"));
+  }
   #endif
+  _autoLatch = enabled;
+  if (_autoLatch) {
+    DSP_CR301bits.SWAuto_Latch = 1;      // Automatic measurement register latch at 7.8125 kHz
+    DSP_CR301bits.SW_Latch1 = 0;
+    DSP_CR301bits.SW_Latch2 = 0;
+  } else {
+    DSP_CR301bits.SWAuto_Latch = 0;      // Automatic measurement register latch at 7.8125 kHz
+    DSP_CR301bits.SW_Latch1 = 1;
+    DSP_CR301bits.SW_Latch2 = 1;
+  }
+  if (_crcEnabled) sendFrameCRC(0x05, 0x05, DSP_CR301bits.LSB, DSP_CR301bits.MSB);
+  else sendFrame(0x05, 0x05, DSP_CR301bits.LSB, DSP_CR301bits.MSB);
+}
+
+
+void STPM::readAll(uint8_t channel, float *voltage, float *current, float* active, float* reactive) {
+  if (!_autoLatch) latch();
+
+  address = PH1_Active_Power_Address;
+  if (channel == 2) address = PH2_Active_Power_Address;
+  sendFrame(address, 0xff, 0xff, 0xff);
+  //SPI.beginTransaction(spiSettings);
+  digitalWrite(CS_PIN, LOW);
+  //delayMicroseconds(1000);
+  readBuffer[0] = SPI.transfer(0xff);
+  readBuffer[1] = SPI.transfer(0xff);
+  readBuffer[2] = SPI.transfer(0xff);
+  readBuffer[3] = SPI.transfer(0xff);
+  *active = calcPower(buffer0to28(readBuffer));
+  readBuffer[0] = SPI.transfer(0xff);
+  readBuffer[1] = SPI.transfer(0xff);
+  readBuffer[2] = SPI.transfer(0xff);
+  readBuffer[3] = SPI.transfer(0xff);
+  // We skip fundamental power here
+  readBuffer[0] = SPI.transfer(0xff);
+  readBuffer[1] = SPI.transfer(0xff);
+  readBuffer[2] = SPI.transfer(0xff);
+  readBuffer[3] = SPI.transfer(0xff);
+  *reactive = calcPower(buffer0to28(readBuffer));
+  digitalWrite(CS_PIN, HIGH);
+  // *apparent = calcPower(buffer0to28(readBuffer));
+  address = V1_Data_Address;
+  if (channel == 2) address = V2_Data_Address;
+  sendFrame(address, 0xff, 0xff, 0xff);
+  //SPI.beginTransaction(spiSettings);
+  digitalWrite(CS_PIN, LOW);
+  //delayMicroseconds(1000);
+  readBuffer[0] = SPI.transfer(0xff);
+  readBuffer[1] = SPI.transfer(0xff);
+  readBuffer[2] = SPI.transfer(0xff);
+  readBuffer[3] = SPI.transfer(0xff);
+  *voltage = calcVolt(buffer0to32(readBuffer));
+  readBuffer[0] = SPI.transfer(0xff);
+  readBuffer[1] = SPI.transfer(0xff);
+  readBuffer[2] = SPI.transfer(0xff);
+  readBuffer[3] = SPI.transfer(0xff);
+  digitalWrite(CS_PIN, HIGH);
+  *current = calcCurrent(buffer0to32(readBuffer));
 }
 
 void STPM::setCurrentGain(uint8_t channel, Gain gain) {
@@ -226,6 +289,7 @@ void STPM::setCurrentGain(uint8_t channel, Gain gain) {
 
 
 void STPM::readPeriods(float* ch1, float* ch2) {
+  if (!_autoLatch) latch();
   u8 address = Period_Address;
   readFrame(address, readBuffer);
   *ch1 = calcPeriod(buffer0to11(readBuffer));
@@ -234,30 +298,35 @@ void STPM::readPeriods(float* ch1, float* ch2) {
 
 
 float STPM::readTotalActiveEnergy() {
+  if (!_autoLatch) latch();
   u8 address = Tot_Active_Energy_Address;
   readFrame(address, readBuffer);
   return (calcEnergy(buffer0to32(readBuffer)));
 }
 
 float STPM::readTotalFundamentalEnergy() {
+  if (!_autoLatch) latch();
   u8 address = Tot_Fundamental_Energy_Address;
   readFrame(address, readBuffer);
   return (calcEnergy(buffer0to32(readBuffer)));
 }
 
 float STPM::readTotalReactiveEnergy() {
+  if (!_autoLatch) latch();
   u8 address = Tot_Reactive_Energy_Address;
   readFrame(address, readBuffer);
   return (calcEnergy(buffer0to32(readBuffer)));
 }
 
 float STPM::readTotalApparentEnergy() {
+  if (!_autoLatch) latch();
   u8 address = Tot_Apparent_Energy_Address;
   readFrame(address, readBuffer);
   return (calcEnergy(buffer0to32(readBuffer)));
 }
 
 float STPM::readActiveEnergy(uint8_t channel) {
+  if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
     #ifdef DEBUG
     Serial.print(F("Info:readActiveEnergy: Channel "));
@@ -273,6 +342,7 @@ float STPM::readActiveEnergy(uint8_t channel) {
 }
 
 float STPM::readFundamentalEnergy(uint8_t channel) {
+  if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
     #ifdef DEBUG
     Serial.print(F("Info:readFundamentalEnergy: Channel "));
@@ -288,6 +358,7 @@ float STPM::readFundamentalEnergy(uint8_t channel) {
 }
 
 float STPM::readReactiveEnergy(uint8_t channel) {
+  if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
     #ifdef DEBUG
     Serial.print(F("Info:readReactiveEnergy: Channel "));
@@ -303,6 +374,7 @@ float STPM::readReactiveEnergy(uint8_t channel) {
 }
 
 float STPM::readApparentEnergy(uint8_t channel) {
+  if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
     #ifdef DEBUG
     Serial.print(F("Info:readApparentEnergy: Channel "));
@@ -318,6 +390,7 @@ float STPM::readApparentEnergy(uint8_t channel) {
 }
 
 void STPM::readPower(uint8_t channel, float* active, float* fundamental, float* reactive, float* apparent) {
+  if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
     #ifdef DEBUG
     Serial.print(F("Info:readPower: Channel "));
@@ -356,6 +429,7 @@ void STPM::readPower(uint8_t channel, float* active, float* fundamental, float* 
 }
 
 float STPM::readActivePower(uint8_t channel) {
+  if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
     #ifdef DEBUG
     Serial.print(F("Info:readActivePower: Channel "));
@@ -371,6 +445,7 @@ float STPM::readActivePower(uint8_t channel) {
 }
 
 float STPM::readFundamentalPower(uint8_t channel) {
+  if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
     #ifdef DEBUG
     Serial.print(F("Info:readFundamentalPower: Channel "));
@@ -386,6 +461,7 @@ float STPM::readFundamentalPower(uint8_t channel) {
 }
 
 float STPM::readReactivePower(uint8_t channel) {
+  if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
     #ifdef DEBUG
     Serial.print(F("Info:readReactivePower: Channel "));
@@ -401,6 +477,7 @@ float STPM::readReactivePower(uint8_t channel) {
 }
 
 float STPM::readApparentRMSPower(uint8_t channel) {
+  if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
     #ifdef DEBUG
     Serial.print(F("Info:readApparentRMSPower: Channel "));
@@ -416,6 +493,7 @@ float STPM::readApparentRMSPower(uint8_t channel) {
 }
 
 float STPM::readApparentVectorialPower(uint8_t channel) {
+  if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
     #ifdef DEBUG
     Serial.print(F("Info:readApparentVectorialPower: Channel "));
@@ -431,6 +509,7 @@ float STPM::readApparentVectorialPower(uint8_t channel) {
 }
 
 float STPM::readMomentaryActivePower(uint8_t channel) {
+  if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
     #ifdef DEBUG
     Serial.print(F("Info:readMomentaryActivePower: Channel "));
@@ -446,6 +525,7 @@ float STPM::readMomentaryActivePower(uint8_t channel) {
 }
 
 float STPM::readMomentaryFundamentalPower(uint8_t channel) {
+  if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
     #ifdef DEBUG
     Serial.print(F("Info:readMomentaryFundamentalPower: Channel "));
@@ -462,6 +542,7 @@ float STPM::readMomentaryFundamentalPower(uint8_t channel) {
 
 // Overvoltage/overcurrent SWELL and undervoltage SAG
 void STPM::readCurrentPhaseAndSwellTime(uint8_t channel, float* phase, float* swell) {
+  if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
     #ifdef DEBUG
     Serial.print(F("Info:readCurrentPhaseAndSwellTime: Channel "));
@@ -481,6 +562,7 @@ void STPM::readCurrentPhaseAndSwellTime(uint8_t channel, float* phase, float* sw
 
 // Overvoltage/overcurrent SWELL and undervoltage SAG
 void STPM::readVoltageSagAndSwellTime(uint8_t channel, float* sag, float* swell) {
+  if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
     #ifdef DEBUG
     Serial.print(F("Info:readSagAndSwellTime: Channel "));
@@ -499,6 +581,7 @@ void STPM::readVoltageSagAndSwellTime(uint8_t channel, float* sag, float* swell)
 }
 
 void STPM::readVoltageAndCurrent(uint8_t channel, float *voltage, float *current) {
+  if (!_autoLatch) latch();
 
   if (channel != 1 && channel != 2) {
     #ifdef DEBUG
@@ -528,6 +611,7 @@ void STPM::readVoltageAndCurrent(uint8_t channel, float *voltage, float *current
 }
 
 float STPM::readVoltage(uint8_t channel) {
+  if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
     #ifdef DEBUG
     Serial.print(F("Info:readVoltage: Channel "));
@@ -542,17 +626,9 @@ float STPM::readVoltage(uint8_t channel) {
   return (calcVolt((int32_t)buffer0to32(readBuffer)));
 }
 
-float STPM::readVoltage32() {
-  #ifdef DEBUG_DEEP
-    Serial.print(F("Info:readVoltage"));
-  #endif
-  u8 address = V1_Data_Address;
-  readFrame(address, readBuffer);
-  return (calcVolt((int32_t)buffer0to32(readBuffer)));
-}
-
 
 float STPM::readCurrent(uint8_t channel) {
+  if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
     #ifdef DEBUG
     Serial.print(F("Info:readCurrent: Channel "));
@@ -567,17 +643,9 @@ float STPM::readCurrent(uint8_t channel) {
   return (calcCurrent((int32_t)buffer0to32(readBuffer)));
 }
 
-float STPM::readCurrent32() {
-  #ifdef DEBUG_DEEP
-    Serial.print(F("Info:readCurrent"));
-  #endif
-  u8 address = C1_Data_Address;
-  readFrame(address, readBuffer);
-  return (calcCurrent((int32_t)buffer0to32(readBuffer)));
-}
-
 
 float STPM::readFundamentalVoltage(uint8_t channel) {
+  if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
     #ifdef DEBUG
     Serial.print(F("Info:readFundamentalVoltage: Channel "));
@@ -593,6 +661,7 @@ float STPM::readFundamentalVoltage(uint8_t channel) {
 }
 
 void STPM::readRMSVoltageAndCurrent(uint8_t channel, float* voltage, float* current) {
+  if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
     #ifdef DEBUG
     Serial.print(F("Info:readRMSVoltage: Channel "));
@@ -610,24 +679,30 @@ void STPM::readRMSVoltageAndCurrent(uint8_t channel, float* voltage, float* curr
   *current = calcCurrent((int16_t)buffer15to32(readBuffer));
 }
 
+
 /*
 * Latch a new measurement in the registers. CS_PIN should be high and automatic
 * measurement off.
 */
-void STPM::latchReg () {
-	latch ();
+void STPM::latchReg() {
+	latch();
 }
-
 
 /*
 * Latch a new measurement in the registers. CS_PIN should be high and automatic
 * measurement off. As inline function.
 */
-inline void STPM::latch () {
-	digitalWrite(SYN_PIN, LOW);
-	delayMicroseconds(4);
-	digitalWrite(SYN_PIN, HIGH);
-	delayMicroseconds(4);
+inline void STPM::latch() {
+#ifdef SPI_LATCH
+  DSP_CR301bits.SW_Latch1 = 1;      // Register latch
+  DSP_CR301bits.SW_Latch2 = 1;      // Register latch
+  sendFrame(0x05, 0x05, DSP_CR301bits.LSB, DSP_CR301bits.MSB);
+#else
+  digitalWrite(SYN_PIN, LOW);
+  delayMicroseconds(4);
+  digitalWrite(SYN_PIN, HIGH);
+  delayMicroseconds(4);
+#endif
 }
 
 /* Conversion of the register values into voltage, current, power, etc
@@ -691,51 +766,58 @@ inline float STPM::calcVolt (int16_t value) {
 }
 
 inline int32_t STPM::buffer0to32(uint8_t *buffer) {
-  int32_t value = buffer[3];
-  value = (value << 8) + buffer[2];
-  value = (value << 8) + buffer[1];
-  value = (value << 8) + buffer[0];
-  return value;
+  return (((buffer[3] << 24) | (buffer[2] << 16)) | (buffer[1] << 8)) | buffer[0];
+  // int32_t value = buffer[3];
+  // value = (value << 8) + buffer[2];
+  // value = (value << 8) + buffer[1];
+  // value = (value << 8) + buffer[0];
+  // return value;
 }
 
 inline int32_t STPM::buffer15to32(uint8_t *buffer) {
-  int32_t value = buffer[3];
-  value = (value << 8) + buffer[2];
-  value = ((value << 8) + buffer[1]) >> 7;
-  return value;
+  return (((buffer[3] << 16) | (buffer[2] << 8)) | buffer[1]) >> 7;
+  // int32_t value = buffer[3];
+  // value = (value << 8) + buffer[2];
+  // value = ((value << 8) + buffer[1]) >> 7;
+  // return value;
 }
 
 
 inline int16_t STPM::buffer16to30(uint8_t *buffer) {
-  int16_t value = buffer[3]&0x7f;//7F
-  value = (value << 8) + buffer[2];
-  return value;
+  return (buffer[3]&0x7f << 8) | buffer[2];
+  // int16_t value = buffer[3]&0x7f;//7F
+  // value = (value << 8) + buffer[2];
+  // return value;
 }
 
 inline int32_t STPM::buffer0to28(uint8_t *buffer) {
-  int32_t value = buffer[3];
-  value = (value << 8) + buffer[2];
-  value = (value << 8) + buffer[1];
-  value = (value << 8) + buffer[0];
-  return value;
+  return (((buffer[3] << 24) | (buffer[2] << 16)) | (buffer[1] << 8)) | buffer[0];
+  // int32_t value = buffer[3];
+  // value = (value << 8) + buffer[2];
+  // value = (value << 8) + buffer[1];
+  // value = (value << 8) + buffer[0];
+  // return value;
 }
 
 inline int16_t STPM::buffer0to14(uint8_t *buffer) {
-  int16_t value = buffer[1]&0x7f;//7F
-  value = (value << 8) + buffer[0];
-  return value;
+  return (buffer[1]&0x7f << 8) | buffer[0];
+  // int16_t value = buffer[1]&0x7f;//7F
+  // value = (value << 8) + buffer[0];
+  // return value;
 }
 
 inline int16_t STPM::buffer0to11(uint8_t *buffer) {
-  int16_t value = buffer[1]&0x0f;//7F
-  value = (value << 8) + buffer[0];
-  return value;
+  return (buffer[1]&0x0f << 8) | buffer[0];
+  // int16_t value = buffer[1]&0x0f;//7F
+  // value = (value << 8) + buffer[0];
+  // return value;
 }
 
 inline int16_t STPM::buffer16to27(uint8_t *buffer) {
-  int16_t value = buffer[3]&0x0f;//7F
-  value = (value << 8) + buffer[2];
-  return value;
+  return (buffer[3]&0x0f << 8) | buffer[2];
+  // int16_t value = buffer[3]&0x0f;//7F
+  // value = (value << 8) + buffer[2];
+  // return value;
 }
 
 void STPM::readFrame(uint8_t address, uint8_t *buffer) {
