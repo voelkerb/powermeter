@@ -5,6 +5,7 @@
 #include <WiFiUdp.h>
 #include <time.h>
 #include <ESP8266mDNS.h>
+#include <EEPROM.h>
 
 // Serial Speed and DEBUG option
 #define SERIAL_SPEED 2000000
@@ -13,8 +14,8 @@
 #define VERSION 0.9
 
 
-#define MDNS_SUFFIX "5"
 #define MDNS_PREFIX "powermeter"
+char MDNSName[4] = "X\x0";
 
 // Commands
 #define CMD_SWITCH_ON 's'
@@ -115,7 +116,11 @@ byte ntpBuffer[NTP_PACKET_SIZE]; //buffer to hold incoming and outgoing
 // A UDP instance to let us send and receive packets over UDP
 WiFiUDP udp;
 
+WiFiClient client;
+WiFiClient streamClient;
+
 void setup() {
+
    // Setup serial communication
   Serial.begin(SERIAL_SPEED);
 
@@ -151,25 +156,38 @@ void setup() {
   timer0_isr_init();
 
 #ifdef DEBUG
-  Serial.printf("Info:Connecting WLAN to %s ", ssid);
+  Serial.printf("Info:Connecting WLAN to %s \r\n", ssid);
 #endif
-  // Setup WLAN
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
-  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
-    Serial.println("Info:Connection Failed! Rebooting...");
-    delay(5000);
-    ESP.restart();
+  long start = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    yield();
+    // After trying to connect for 5s continue without wifi
+    if (millis() - start > 8000) {
+      WiFi.forceSleepBegin();
+      Serial.println(F("Info:Connection Failed! Continuing without wifi..."));
+      break;
+    }
   }
 #ifdef DEBUG
-  Serial.println(F("Connected to WLAN"));
-  Serial.print("Info:Connected to "); Serial.println(ssid);
-  Serial.print("Info:IP Address: "); Serial.println(WiFi.localIP());
+  Serial.println(F("Info:Connected to WLAN"));
+  Serial.print(F("Info:Connected to ")); Serial.println(ssid);
+  Serial.print(F("Info:IP Address: ")); Serial.println(WiFi.localIP());
 #endif
 
+  // Load the MDNS name from eeprom
+  EEPROM.begin(16);
+  // To initially store the mdsn name into eeprom
+  // EEPROM.put(0, MDNSName);
+  // EEPROM.commit();
+  // while(true){}
+  EEPROM.get(0, MDNSName);
   // Setting up MDNs with the given Name
-  if (!MDNS.begin(MDNS_PREFIX MDNS_SUFFIX)) {             // Start the mDNS responder for esp8266.local
-    Serial.println("Error setting up MDNS responder!");
+  String MDNSstr = MDNS_PREFIX; MDNSstr += MDNSName;
+  Serial.print(F("Info:MDNS Name: ")); Serial.println(MDNSstr);
+  if (!MDNS.begin(MDNSstr.c_str())) {             // Start the mDNS responder for esp8266.local
+    Serial.println(F("Info:Error setting up MDNS responder!"));
   }
 
   // Start the TCP server
@@ -181,9 +199,6 @@ void setup() {
   // configTime(2 * 3600, 0, "pool.ntp.org", "time.nist.gov");
   Serial.println(F("Info:Setup done"));
 }
-
-WiFiClient client;
-WiFiClient streamClient;
 
 // the loop routine runs over and over again forever:
 void loop() {
