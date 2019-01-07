@@ -28,6 +28,7 @@ char MDNSName[4] = "X\x0";
 #define CMD_STOP_SAMPLE 'p'
 #define CMD_RESET '?'
 #define CMD_RESTART 'r'
+#define CMD_MDNS 'n'
 
 // Pins for STPM34 SPI Connection
 const int STPM_CS = 15;
@@ -178,18 +179,8 @@ void setup() {
 
   // Load the MDNS name from eeprom
   EEPROM.begin(16);
-  // To initially store the mdsn name into eeprom
-  // EEPROM.put(0, MDNSName);
-  // EEPROM.commit();
-  // while(true){}
-  EEPROM.get(0, MDNSName);
-  // Setting up MDNs with the given Name
-  String MDNSstr = MDNS_PREFIX; MDNSstr += MDNSName;
-  Serial.print(F("Info:MDNS Name: ")); Serial.println(MDNSstr);
-  if (!MDNS.begin(MDNSstr.c_str())) {             // Start the mDNS responder for esp8266.local
-    Serial.println(F("Info:Error setting up MDNS responder!"));
-  }
 
+  initMDNS();
   // Start the TCP server
   server.begin();
   streamServer.begin();
@@ -199,6 +190,8 @@ void setup() {
   // configTime(2 * 3600, 0, "pool.ntp.org", "time.nist.gov");
   Serial.println(F("Info:Setup done"));
 }
+
+
 
 // the loop routine runs over and over again forever:
 void loop() {
@@ -282,6 +275,21 @@ void loop() {
   }
 
   yield();
+}
+
+
+/****************************************************
+ * Init the MDNs name from eeprom, only the number ist
+ * stored in the eeprom, construct using prefix.
+ ****************************************************/
+void initMDNS() {
+  EEPROM.get(0, MDNSName);
+  // Setting up MDNs with the given Name
+  String MDNSstr = MDNS_PREFIX; MDNSstr += MDNSName;
+  Serial.print(F("Info:MDNS Name: ")); Serial.println(MDNSstr);
+  if (!MDNS.begin(MDNSstr.c_str())) {             // Start the mDNS responder for esp8266.local
+    Serial.println(F("Info:Error setting up MDNS responder!"));
+  }
 }
 
 /****************************************************
@@ -560,6 +568,20 @@ String handleCommand(char c, Stream &getter) {
     case CMD_STOP_SAMPLE:
       stopSampling();
       break;
+    case CMD_MDNS: {
+      int value = parseValue(getter);
+      // To initially store the mdsn name into eeprom
+      sprintf (MDNSName, "%i", value);
+      EEPROM.put(0, MDNSName);
+      EEPROM.commit();
+      // while(true){}
+      EEPROM.get(0, MDNSName);
+
+      response = "Info:Set MDNS name to: ";
+      response += MDNS_PREFIX;
+      response += MDNSName;
+      break;
+    }
     case CMD_SWITCH_FOR:
       delay(10);
       state = STATE_PRE;
