@@ -11,7 +11,7 @@
 #define SERIAL_SPEED 2000000
 #define DEBUG
 //#define SERIAL_OUTPUT
-#define VERSION 0.9
+#define VERSION 0.2
 
 
 #define MDNS_PREFIX "powermeter"
@@ -52,20 +52,15 @@ STPM stpm34(STPM_RES, STPM_CS, STPM_SYN);
 // Number of bytes for one measurement
 #define MEASURMENT_BYTES 16 //(16+2)
 volatile float values[5] = {0};
-#define NUM_BUF 10
 // Chunk sizes of data to send
-#define BUF_SIZE MEASURMENT_BYTES*256
+#define BUF_SIZE MEASURMENT_BYTES*1024
+uint32_t bufSize = MEASURMENT_BYTES*1024;
 // Circular chunked buffer
-char buffer[NUM_BUF][BUF_SIZE] = {};
+char buffer[BUF_SIZE+MEASURMENT_BYTES] = {};
 // Which buffer to read
-volatile int whichBufferRead = 0;
+volatile uint32_t readPtr = 0;
 // Which buffer to write
-volatile uint8_t whichBufferWrite = 0;
-// The position inside a bufferchunk to write to
-volatile uint16_t inBuffer = 0;
-// For e.g. 10Hz. Reading we want the chunk size to be smaller
-// s.t. we do not have to wait e.g. 25 seconds to become data
-// Calculation is down in startSampling function
+volatile uint32_t writePtr = 0;
 volatile int bufferFlushSize = BUF_SIZE;
 
 // WLAN configuration
@@ -97,6 +92,7 @@ unsigned long postSampleCnt = 0;
 #define STATE_POST 3
 #define STATE_STREAM 4
 #define STATE_SAMPLE_USB 5
+#define STATE_STREAM_USB 6
 volatile int state = STATE_IDLE;
 
 volatile unsigned long i = 0;
@@ -138,11 +134,9 @@ void setup() {
   digitalWrite(RELAY_PIN, HIGH);
 
   // Clear the buffer at beginning
-  for (int i = 0; i < NUM_BUF; i++) {
-    for (int j = 0; j < BUF_SIZE; j+=2) {
-      buffer[i][j] = '\r';
-      buffer[i][j+1] = '\n';
-    }
+  for (int j = 0; j < BUF_SIZE; j+=2) {
+      buffer[j] = '\r';
+      buffer[j+1] = '\n';
   }
 
 #ifdef DEBUG
@@ -192,7 +186,13 @@ void setup() {
 }
 
 
-
+uint16_t getReadWriteDistance() {
+//  noInterrupts();
+//  uint32_t cur_writePtr = writePtr;
+//  interrupts();
+  if (writePtr < readPtr) return writePtr + (BUF_SIZE - readPtr);
+  else return writePtr - readPtr;
+}
 // the loop routine runs over and over again forever:
 void loop() {
 
@@ -234,21 +234,37 @@ void loop() {
   // if we are sampling, then pass the data over to the client
   if (state == STATE_SAMPLE && client.connected()) {
     // TODO: This is not nice and might cause a crash since the buffer is shared
-    while (whichBufferRead != whichBufferWrite) {
+
+//    noInterrupts();
+//    uint32_t cur_writePtr = writePtr;
+//    interrupts();
+//    Serial.print("WritePtr: ");
+//    Serial.println(cur_writePtr);
+//    Serial.print("ReadPtr: ");
+//    Serial.println(readPtr);
+//    Serial.print("Distance: ");
+//    Serial.println(getReadWriteDistance());
+    while (getReadWriteDistance() > bufferFlushSize) {
       for (int i = 0; i < bufferFlushSize; i += MEASURMENT_BYTES) {
-        client.write((uint8_t*)&buffer[whichBufferRead][i], MEASURMENT_BYTES);
-        client.write("\r\n", 2);
+        client.write((uint8_t*)&buffer[readPtr], MEASURMENT_BYTES);
+        client.print("\r\n");
+        readPtr = (readPtr+MEASURMENT_BYTES) % bufSize;
       }
-      whichBufferRead = (whichBufferRead + 1) % NUM_BUF;
     }
   // If we are streaming then pass data over connected users of the streaming server
   } else if (state == STATE_STREAM) {
     if (streamClient.connected()) {
       // TODO: This is not nice and might cause a crash since the buffer is shared
-      while (whichBufferRead != whichBufferWrite) {
-        // Leave out \r\n over this connection
-        streamClient.write(&buffer[whichBufferRead][0], bufferFlushSize);
-        whichBufferRead = (whichBufferRead + 1) % NUM_BUF;
+      while (getReadWriteDistance() > bufferFlushSize) {
+        uint16_t end = (readPtr+bufferFlushSize)%BUF_SIZE;
+        if (end >= readPtr) {
+          // Leave out \r\n over this connection
+          streamClient.write(&buffer[readPtr], bufferFlushSize);
+        } else {
+          streamClient.write(&buffer[readPtr], BUF_SIZE - readPtr);
+          streamClient.write(&buffer[0], end);
+        }
+        readPtr = end;
       }
     // Client is not connected yet, rush and try to connect
     } else {
@@ -265,12 +281,25 @@ void loop() {
     // }
   // USB Sampling happens here
   } else if (state == STATE_SAMPLE_USB) {
-    while (whichBufferRead != whichBufferWrite) {
+    while (getReadWriteDistance() > bufferFlushSize) {
       for (int i = 0; i < bufferFlushSize; i += MEASURMENT_BYTES) {
-        Serial.write((uint8_t*)&buffer[whichBufferRead][i], MEASURMENT_BYTES);
+        Serial.write((uint8_t*)&buffer[readPtr], MEASURMENT_BYTES);
         Serial.print("\r\n");
+        readPtr = (readPtr+MEASURMENT_BYTES) % bufSize;
       }
-      whichBufferRead = (whichBufferRead + 1) % NUM_BUF;
+    }
+  } else if (state == STATE_STREAM_USB) {
+    // TODO: This is not nice and might cause a crash since the buffer is shared
+    while (getReadWriteDistance() > bufferFlushSize) {
+      uint16_t end = (readPtr+bufferFlushSize)%bufSize;
+      if (end >= readPtr) {
+        // Leave out \r\n over this connection
+        Serial.write((uint8_t*)&buffer[readPtr], bufferFlushSize);
+      } else {
+        Serial.write((uint8_t*)&buffer[readPtr], BUF_SIZE - readPtr);
+        Serial.write((uint8_t*)&buffer[0], end);
+      }
+      readPtr = end;
     }
   }
 
@@ -315,10 +344,11 @@ void tryConnectStream() {
 /****************************************************
  * ISR for sampling
  ****************************************************/
+volatile uint32_t before = 0;
 void ICACHE_RAM_ATTR sample_ISR(){
   // Vaiables for frequency count
   i++;
-  if (i == samplingRate) {
+  if (i >= samplingRate) {
     freqCalcNow = micros();
     freq = freqCalcNow-freqCalcStart;
     freqCalcStart = freqCalcNow;
@@ -327,16 +357,12 @@ void ICACHE_RAM_ATTR sample_ISR(){
   // stpm34.readVoltageAndCurrent(1, (float*) &values[0], (float*) &values[1]);
   // values[2] = stpm34.readActivePower(1);
   // values[3] = stpm34.readReactivePower(1);
+  before = writePtr;
   stpm34.readAll(1, (float*) &values[0], (float*) &values[1], (float*) &values[2], (float*) &values[3]);
-  memcpy(&buffer[whichBufferWrite][inBuffer], (void*)&values[0], MEASURMENT_BYTES);
-  inBuffer += MEASURMENT_BYTES;
-  // Handle end of chunk size
-  if (inBuffer > bufferFlushSize-MEASURMENT_BYTES) {
-    inBuffer = 0;
-    whichBufferWrite = (whichBufferWrite + 1) % NUM_BUF;
-    // If the next buffer has not sent to the client, indicate that data is missing
-    if (whichBufferWrite == whichBufferRead) Serial.println("Info:Buffer ERROR, Head meets Tail...");
-  }
+  memcpy(&buffer[writePtr], (void*)&values[0], MEASURMENT_BYTES);
+  writePtr = (writePtr+MEASURMENT_BYTES) % bufSize;
+  // If the next buffer has not sent to the client, indicate that data is missing
+  // TO
 
   // Calculate next time to execute and compare to current time
   next = next + TIMER_CYCLES_FAST;
@@ -460,6 +486,7 @@ String handleCommand(char c, Stream &getter) {
   String response = "";
   switch (c) {
     case CMD_RESET:
+      stopSampling();
       turnInterrupt(false);
       response = "Info:Setup done";
       break;
@@ -482,6 +509,8 @@ String handleCommand(char c, Stream &getter) {
         response += rate;
         break;
       }
+      TIMER_CYCLES_FAST = (CLOCK * 1000000) / samplingRate; // Cycles between HW timer inerrupts
+      bufferFlushSize = min(max(MEASURMENT_BYTES, int(float(0.1*(float)(samplingRate*MEASURMENT_BYTES)))), BUF_SIZE);
       Serial.print("Info:SamplingRate set to ");
       Serial.println(samplingRate);
       Serial.print("Info:BufferFlushSize: ");
@@ -489,8 +518,12 @@ String handleCommand(char c, Stream &getter) {
       break;
     }
     case CMD_START_STREAM: {
-      state = STATE_STREAM;
-      tryConnectStream();
+      if (&getter == &Serial) {
+        state = STATE_STREAM_USB;
+      } else {
+        state = STATE_STREAM;
+        tryConnectStream();
+      }
       startSampling();
       break;
     }
@@ -567,6 +600,7 @@ String handleCommand(char c, Stream &getter) {
       break;
     case CMD_STOP_SAMPLE:
       stopSampling();
+      response += "Info:stop";
       break;
     case CMD_MDNS: {
       int value = parseValue(getter);
@@ -619,11 +653,11 @@ void stopSampling() {
  * all buffer indices are reset to the default values.
  ****************************************************/
 void startSampling() {
+  i=0;
   TIMER_CYCLES_FAST = (CLOCK * 1000000) / samplingRate; // Cycles between HW timer inerrupts
-  bufferFlushSize = min(max(MEASURMENT_BYTES, int(0.1*samplingRate*MEASURMENT_BYTES)), BUF_SIZE);
-  whichBufferRead = 0;
-  whichBufferWrite = 0;
-  inBuffer = 0;
+  bufferFlushSize = min(max(MEASURMENT_BYTES, int(float(0.1*(float)(samplingRate*MEASURMENT_BYTES)))), BUF_SIZE);
+  writePtr = 0;
+  readPtr = 0;
   turnInterrupt(true);
 }
 
