@@ -1,46 +1,50 @@
-extern "C" {
-  #include "user_interface.h"
-}
 #include <SPI.h>
 #include "STPM.h"
-#include <ESP8266WiFi.h>
+#include <esp_wifi.h>
+#include <WiFi.h>
 // #include <esp_wifi.h>
-#include <WiFiClient.h>
-#include <WiFiUdp.h>
+#include "esp_deep_sleep.h"
 #include <time.h>
-#include <EEPROM.h>
 #include <ArduinoJson.h>
 #include <TimeLib.h>
-#include <ESP8266mDNS.h>
+#include <ESPmDNS.h>
+/* for normal hardware wire use below */
+#include "esp_bt.h"
+#include "relay.h"
+#include "rtc.h"
+#include "config.h"
+#include <esp_int_wdt.h>
+#include <esp_task_wdt.h>
 
 // Arduino Updater
 #include <ArduinoOTA.h>
 
-// Webupdater
-// #include <ESP8266WebServer.h>
-// #include <ESP8266HTTPUpdateServer.h>
 
 // Serial Speed and DEBUG option
-// #define SERIAL_SPEED 2000000
-#define SERIAL_SPEED 115200
+#define SERIAL_SPEED 2000000
 #define DEBUG
-//#define SENT_LIFENESS_TO_CLIENTS
 
-#define VERSION "0.2_x"
+#define VERSION "0.2_x_rtc"
 #define STANDARD_UDP_PORT 54323
 #define STANDARD_TCP_SAMPLE_PORT 54321
 #define STANDARD_TCP_STREAM_PORT 54322
 
-#define MAX_MDNS_LEN 16
-#define MDNS_START_ADDRESS 0
+Configuration config;
+
 // Pins for STPM34 SPI Connection
-const int STPM_CS = 15;
-const int STPM_SYN = 4;
+const int STPM_CS = 5;
+const int STPM_SYN = 14;
 // Reset pin of STPM
-const int STPM_RES = 5;
+const int STPM_RES = 12;
 
 // Pins for 230V Relay
-const int RELAY_PIN = 2;
+const int RELAY_PIN_S = 26;
+const int RELAY_PIN_R = 27;
+
+Relay relay(RELAY_PIN_S, RELAY_PIN_R);
+
+const int RTC_INT = 25;
+Rtc rtc(RTC_INT);
 
 // STPM Object
 STPM stpm34(STPM_RES, STPM_CS, STPM_SYN);
@@ -55,19 +59,23 @@ volatile long lastTs = 0;
 // Number of bytes for one measurement
 int MEASURMENT_BYTES = 8; //(16+2)
 // Chunk sizes of data to send
-#define BUF_SIZE (4096*10)
-uint32_t chunkSize = 256;
+const int PS_BUF_SIZE = 3*1024*1024;
+#define NUM_RAM_BUFFERS 4
+uint8_t* psdRamBuffer;
+volatile uint32_t chunkSize = 256;
 // Circular chunked buffer
-static uint8_t buffer[BUF_SIZE] = {0};
+// static uint8_t buffer[BUF_SIZE] = {0};
 // Static vs dynamic allocation
-// uint8_t * buffer;
 #define MAX_SEND_SIZE 512 // 1024
+static uint8_t buffer[NUM_RAM_BUFFERS][MAX_SEND_SIZE];
+volatile bool flushBuffer[NUM_RAM_BUFFERS] = { false};
+volatile uint8_t currentBuffer = 0;
 // MAX_SEND_SIZE+"Data:"+4+2
 static uint8_t sendbuffer[MAX_SEND_SIZE+16] = {0};
 // Buffer read/write position
-uint16_t readPtr = 0;
-volatile uint16_t writePtr = 0;
-volatile uint16_t nextWritePtr = 0;
+uint32_t psdReadPtr = 0;
+uint32_t psdWritePtr = 0;
+volatile uint32_t writePtr = 0;
 
 // WLAN configuration
 const char *ssids[] = {"energywifi", "esewifi"};
@@ -78,11 +86,11 @@ WiFiServer server(STANDARD_TCP_SAMPLE_PORT);
 WiFiServer streamServer(STANDARD_TCP_STREAM_PORT);
 
 // TIMER stuff
-#define CLOCK 160 // clock frequency in MHz.
+#define CLOCK 240 // clock frequency in MHz.
 #define DEFAUL_SR 4000
 unsigned int samplingRate = DEFAUL_SR; // Standard read frequency is 4kHz
 // Calculate the number of cycles we have to wait
-volatile uint32_t TIMER_CYCLES_FAST = (CLOCK * 1000000) / samplingRate; // Cycles between HW timer inerrupts
+volatile uint32_t TIMER_CYCLES_FAST = (1000000) / samplingRate; // Cycles between HW timer inerrupts
 volatile uint32_t timer_next;
 volatile uint32_t timer_now;
 
@@ -91,9 +99,12 @@ volatile uint32_t timer_now;
 #define CMD_SWITCH "switch"
 #define CMD_STOP "stop"
 #define CMD_RESTART "restart"
+#define CMD_RESET "factoryReset"
 #define CMD_INFO "info"
 #define CMD_MDNS "mdns"
 #define CMD_NTP "ntp"
+#define CMD_ADD_WIFI "addWifi"
+#define CMD_REMOVE_WIFI "delWifi"
 
 #define STATE_IDLE -1
 #define STATE_SAMPLE_USB 0
@@ -123,9 +134,6 @@ char command[COMMAND_MAX_SIZE] = {'\0'};
 StaticJsonDocument<2*COMMAND_MAX_SIZE> docRcv;
 StaticJsonDocument<2*COMMAND_MAX_SIZE> docSend;
 String response = "";
-
-char mdnsName[MAX_MDNS_LEN] = {'\0'};
-
 
 #define LOCATION_OFFSET (2*60*60)
 IPAddress timeServerIP; // time.nist.gov NTP server address
@@ -169,47 +177,71 @@ const char* update_password = "admin";
 // ESP8266WebServer httpServer(80);
 // ESP8266HTTPUpdateServer httpUpdater;
 
+hw_timer_t * timer = NULL;
+portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
+portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;  // DOESN'T SEEM TO MAKE ANY DIFFERENCE
+
+TaskHandle_t TaskCore2;
+#include "esp32-hal-cpu.h"
+
+
+extern "C" {
+  #include <esp_spiram.h>
+  #include <esp_himem.h>
+}
+
+TaskHandle_t TaskLoop2;
+
+// Checks if motion was detected, sets LED HIGH and starts a timer
+void IRAM_ATTR sqwvTriggered() {
+  Serial.println("Pin interrupt");
+}
 
 /************************ SETUP *************************/
 void setup() {
-  // Set Relay pins as output which should be switched on by default
-  pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, HIGH);
+  // We do not need bluetooth, so disable it
+  esp_bt_controller_disable();
 
    // Setup serial communication
   Serial.begin(SERIAL_SPEED);
 
-  // buffer = (uint8_t *)malloc(BUF_SIZE);
-  // if (!buffer) {
-  //   Serial.println("Buffer Alloc fail");
-  // } else {
-  //   Serial.println("Buffer Alloc success");
-  // }
+  relay.set(true);
 
+  if (psdRamBuffer = (uint8_t*)ps_malloc(PS_BUF_SIZE)) {
+    Serial.printf("Info:Allocated %u Bytes of RAM\n", PS_BUF_SIZE);
+  } else {
+    Serial.println("Info:ps_malloc failed");
+  }
+  config.load();
+
+  timer_init();
+
+  int myfreq = getCpuFrequencyMhz();
+  Serial.print("Core @ ");
+  Serial.print(myfreq);
+  Serial.println("MHz");
   // Setup STPM 32
   stpm34.init();
-  timer0_isr_init();
 
-  // Load the MDNS name from eeprom
-  EEPROM.begin(2*MAX_MDNS_LEN);
+  rtc.init();
+  rtc.enableInterrupt(1, sqwvTriggered);
 
 #ifdef DEBUG
   Serial.println("Info:Connecting WLAN ");
 #endif
   WiFi.mode(WIFI_STA);
-  // esp_wifi_set_ps(WIFI_PS_NONE);
-  wifi_set_sleep_type(NONE_SLEEP_T);
-  char * name = getMDNS();
-  WiFi.hostname(name);
+  esp_wifi_set_ps(WIFI_PS_NONE);
+  setupOTA();
+  //wifi_set_sleep_type(NONE_SLEEP_T);
+  WiFi.setHostname(config.name);
   connectNetwork();
+  WiFi.setHostname(config.name);
 
   initMDNS();
   // Start the TCP server
   server.begin();
   streamServer.begin();
 
-  // Let nagle algorithm decide wether to send tcp packets or not or fragment them
-  client.setDefaultNoDelay(false);
 
   udpNtp.begin(localNTPPort);
 
@@ -217,9 +249,8 @@ void setup() {
 
   response.reserve(2*COMMAND_MAX_SIZE);
 
-  WiFi.setOutputPower(20.5);
+  // WiFi.setOutputPower(20.5);
 
-  setupOTA();
 
   Serial.print(F("Info:SketchFree: "));
   Serial.println(ESP.getFreeSketchSpace());
@@ -229,8 +260,47 @@ void setup() {
   mdnsUpdate = millis();
 }
 
+void createPSRAM_TASK() {
+  xTaskCreatePinnedToCore(
+        loop2, /* Function to implement the task */
+        "Loop2", /* Name of the task */
+        10000,  /* Stack size in words */
+        NULL,  /* Task input parameter */
+        1,  /* Priority of the task */
+        &TaskLoop2,  /* Task handle. */
+        0); /* Core where the task should run */
+}
+
+void loop2( void * pvParameters ) {
+  while (true) {
+    for(uint8_t a = 0; a < NUM_RAM_BUFFERS; a++){
+      if(flushBuffer[a]) {
+        Serial.print("RW Distance:");
+        Serial.println(getReadWriteDistance());
+        // move buffer to PSDRAM
+        uint32_t end = (psdWritePtr+chunkSize)%PS_BUF_SIZE;
+
+        //memcpy((uint8_t*)&psdRamBuffer[psdWritePtr],(uint8_t*)&buffer[a][0], chunkSize);
+
+        if (end > psdWritePtr) {
+          memcpy((uint8_t*)&psdRamBuffer[psdWritePtr],(uint8_t*)&buffer[a][0], chunkSize);
+        } else {
+          memcpy((uint8_t*)&psdRamBuffer[psdWritePtr],(uint8_t*)&buffer[a][0], PS_BUF_SIZE - psdWritePtr);
+          memcpy((uint8_t*)&psdRamBuffer[psdWritePtr],(uint8_t*)&buffer[a][PS_BUF_SIZE - psdWritePtr], end);
+        }
+        psdWritePtr = end;
+        flushBuffer[a] = false;
+      }
+    }
+    vTaskDelay(2);
+    yield();
+  }
+}
+
 // the loop routine runs over and over again forever:
 void loop() {
+
+
   if (WiFi.status() != WL_CONNECTED) {
     connectNetwork();
     lifenessUpdate = millis();
@@ -244,7 +314,7 @@ void loop() {
     ArduinoOTA.handle();
 
     // Update mdns only on idle
-    MDNS.update();
+    //MDNS.update();
     // Re-advertise service
     if ((long)(millis() - mdnsUpdate) >= 0) {
       MDNS.addService("elec", "tcp", 54322);
@@ -252,6 +322,7 @@ void loop() {
     }
     // Update lifeness only on idle every second
     if ((long)(millis() - lifenessUpdate) >= 0) {
+      rtc.update();
       // MDNS.update();
       lifenessUpdate += 1000;
       #ifdef DEBUG
@@ -265,8 +336,8 @@ void loop() {
   // If we only have 100 ms before sampling should start, wait actively
   if (next_state != STATE_IDLE) {
     if (samplingCountdown != 0 and (samplingCountdown - millis()) < 1000) {
-      WiFi.setOutputPower(20.5);
-      wifi_set_sleep_type(NONE_SLEEP_T);
+      // WiFi.setOutputPower(20.5);
+      esp_wifi_set_ps(WIFI_PS_NONE);
       // Ramp up TCP Speed
       if (client.connected() and next_state == STATE_SAMPLE_TCP) {
         while (((long)(samplingCountdown) - millis()) > 100) {
@@ -350,9 +421,7 @@ void loop() {
       state = STATE_IDLE;
       stopSampling();
     } else {
-      if (client.availableForWrite() > 0) {
-        writeChunks(client, false);
-      }
+      writeChunks(client, false);
     }
   } else if (state == STATE_SAMPLE_UDP) {
     if (!client.connected()) {
@@ -378,13 +447,13 @@ void loop() {
       state = STATE_IDLE;
       stopSampling();
     } else {
-      if (streamClient.availableForWrite() > 0) {
-        writeChunks(streamClient, false, false);
-      }
+      writeChunks(streamClient, false, false);
     }
   }
   yield();
 }
+
+
 
 void setupOTA() {
 
@@ -426,34 +495,31 @@ void setupOTA() {
       Serial.println("End Failed");
     }
     // No matter what happended, simply restart
-    stopSampling();
-    WiFi.forceSleepBegin();
-    wdt_reset();
     ESP.restart();
-    while(1) wdt_reset();
   });
 
   ArduinoOTA.begin();
 }
 
 void connectNetwork() {
-  int numKnownNetworks = sizeof(ssids)/sizeof(ssids[0]);
   #ifdef DEBUG
   Serial.print(F("Info:Known Networks: "));
-  for (int i = 0; i < numKnownNetworks; i++) {
-    Serial.print(ssids[i]);
-    if (i < numKnownNetworks-1) Serial.print(", ");
+  for (int i = 0; i < config.numAPs; i++) {
+    Serial.print(config.wifiSSIDs[i]);
+    if (i < config.numAPs-1) Serial.print(", ");
   }
   Serial.println("");
   #endif
 
+  int n = 0;
   while (WiFi.status() != WL_CONNECTED) {
     // WiFi.scanNetworks will return the number of networks found
-    int n = WiFi.scanNetworks();
+    n = WiFi.scanNetworks();
     #ifdef DEBUG
     Serial.print(F("Info:Scan done "));
     if (n == 0) {
       Serial.println(F(" no networks found"));
+      // TODO: Open wifi network here
     } else {
       Serial.print(n);
       Serial.println(F(" networks found"));
@@ -463,8 +529,7 @@ void connectNetwork() {
         Serial.print(WiFi.SSID(i));
         Serial.print(F(" ("));
         Serial.print(WiFi.RSSI(i));
-        Serial.print(F(")"));
-        Serial.println((WiFi.encryptionType(i) == ENC_TYPE_NONE) ? " " : " *");
+        Serial.println(F(")"));
       }
     }
     #endif
@@ -473,8 +538,8 @@ void connectNetwork() {
       int found = -1;
       int linkQuality = -1000; // The smaller the worse the quality (in dBm)
       for (int i = 0; i < n; ++i) {
-        for (int j = 0; j < numKnownNetworks; j++) {
-          if (strcmp(WiFi.SSID(i).c_str(), ssids[j]) == 0) {
+        for (int j = 0; j < config.numAPs; j++) {
+          if (strcmp(WiFi.SSID(i).c_str(), config.wifiSSIDs[j]) == 0) {
             if (WiFi.RSSI(i) > linkQuality) {
               linkQuality = WiFi.RSSI(i);
               found = j;
@@ -486,9 +551,9 @@ void connectNetwork() {
       if (found != -1) {
         #ifdef DEBUG
         Serial.print(F("Info:Known network with best quality: "));
-        Serial.println(ssids[found]);
+        Serial.println(config.wifiSSIDs[found]);
         #endif
-        WiFi.begin(ssids[found], passwords[found]);
+        WiFi.begin(config.wifiSSIDs[found], config.wifiPWDs[found]);
         long start = millis();
         while (WiFi.status() != WL_CONNECTED) {
           yield();
@@ -496,7 +561,7 @@ void connectNetwork() {
           if (millis() - start > 8000) {
             #ifdef DEBUG
             Serial.print(F("Info:Connection to "));
-            Serial.print(ssids[found]);
+            Serial.print(config.wifiSSIDs[found]);
             Serial.println(F(" failed!"));
             #endif
             break;
@@ -517,9 +582,9 @@ void connectNetwork() {
 }
 
 
-uint16_t getReadWriteDistance() {
-  if (writePtr < readPtr) return writePtr + (BUF_SIZE - readPtr);
-  else return writePtr - readPtr;
+uint32_t getReadWriteDistance() {
+  if (psdWritePtr < psdReadPtr) return psdWritePtr + (PS_BUF_SIZE - psdReadPtr);
+  else return psdWritePtr - psdReadPtr;
 }
 
 inline void writeChunks(Stream &getter, bool tail) {
@@ -542,8 +607,8 @@ uint8_t packet_prefix[sizeof(uint32_t)];
 void writeChunk(Stream &getter, uint16_t size, bool prefix) {
   if (&getter == &client)
   if (size <= 0) return;
-  uint16_t start = 0;
-  uint16_t end = (readPtr+size)%BUF_SIZE;
+  uint32_t start = 0;
+  uint32_t end = (psdReadPtr+size)%PS_BUF_SIZE;
   long ttime = millis();
   if (prefix) {
     // getter.print(F("Data:"));
@@ -561,33 +626,47 @@ void writeChunk(Stream &getter, uint16_t size, bool prefix) {
   }
   uint32_t sent = 0;
 
-  cli();//stop interrupts
-  if (end > readPtr) {
-    memcpy_P(&sendbuffer[start], &buffer[readPtr], size);
+  if (end > psdReadPtr) {
+    memcpy(&sendbuffer[start], &psdRamBuffer[psdReadPtr], size);
     // memcpy_P(&sendbuffer[0], &buffer[readPtr], size);
     // sent = sent + getter.write((uint8_t*)&buffer[readPtr], size);
   } else {
-    memcpy_P(&sendbuffer[start], &buffer[readPtr], BUF_SIZE - readPtr);
-    memcpy_P(&sendbuffer[start+(BUF_SIZE - readPtr)], &buffer[0], end);
+    memcpy(&sendbuffer[start], &psdRamBuffer[psdReadPtr], PS_BUF_SIZE - psdReadPtr);
+    memcpy(&sendbuffer[start+(PS_BUF_SIZE - psdReadPtr)], &psdRamBuffer[0], end);
     // memcpy_P(&sendbuffer[0], &buffer[readPtr], BUF_SIZE - readPtr);
     // memcpy_P(&sendbuffer[BUF_SIZE - readPtr], &buffer[0], end);
     // sent = sent + getter.write((uint8_t*)&buffer[readPtr], BUF_SIZE - readPtr);
     // sent = sent + getter.write((uint8_t*)&buffer[0], end);
   }
-  readPtr = end;
-  sei();
+  psdReadPtr = end;
   // Everything is sent at once (hopefully)
   sent = sent + getter.write((uint8_t*)&sendbuffer[0], size+start);
   if (sent > start) sentSamples += (sent-start)/MEASURMENT_BYTES;
 }
 
 volatile float values[4] = {0};
-volatile uint32_t isrTime = 0;
+
+// FPU register state
+uint32_t cp0_regs[18];
+
 /****************************************************
  * ISR for sampling
  ****************************************************/
-void ICACHE_RAM_ATTR sample_ISR(){
-  cli();//stop interrupts
+void IRAM_ATTR sample_ISR(){
+
+  portENTER_CRITICAL_ISR(&timerMux);
+  // get FPU state
+  uint32_t cp_state = xthal_get_cpenable();
+
+  // enable FPU if it is deactivated since we use floats
+  if(cp_state) {
+    // Save FPU registers
+    xthal_save_cp0(cp0_regs);
+  } else {
+    // enable FPU
+    xthal_set_cpenable(1);
+  }
+
   // Vaiables for frequency count
   counter++;
   totalSamples++;
@@ -597,6 +676,7 @@ void ICACHE_RAM_ATTR sample_ISR(){
     freqCalcStart = freqCalcNow;
     counter = 0;
   }
+
   if (measures == STATE_VI) {
     stpm34.readVoltageAndCurrent(1, (float*) &values[0], (float*) &values[1]);
   } else if (measures == STATE_PQ) {
@@ -604,32 +684,32 @@ void ICACHE_RAM_ATTR sample_ISR(){
   } else if (measures == STATE_VIPQ) {
     stpm34.readAll(1, (float*) &values[0], (float*) &values[1], (float*) &values[2], (float*) &values[3]);
   }
+  memcpy(&buffer[currentBuffer][writePtr], (void*)&values[0], MEASURMENT_BYTES);
+  // memcpy_P(&buffer[writePtr], (void*)&values[0], MEASURMENT_BYTES);
 
-  memcpy_P(&buffer[writePtr], (void*)&values[0], MEASURMENT_BYTES);
-
-  nextWritePtr = ((writePtr+MEASURMENT_BYTES) % BUF_SIZE);
-  if (writePtr<readPtr and nextWritePtr >= readPtr) {
-    Serial.println(F("Info:BufferOvf"));
-    packetNumber += BUF_SIZE/chunkSize;
+  writePtr = writePtr+MEASURMENT_BYTES;
+  if (writePtr >= chunkSize) {
+    flushBuffer[currentBuffer] = true;
+    writePtr = 0;
+    currentBuffer = (currentBuffer+1)%NUM_RAM_BUFFERS;
+    if(flushBuffer[currentBuffer]) {
+      Serial.println(F("Info:BufferOvf"));
+      packetNumber += NUM_RAM_BUFFERS;
+      currentBuffer = (currentBuffer+1)%NUM_RAM_BUFFERS;
+    }
   }
-  writePtr = nextWritePtr;
 
-
-  // Calculate next time to execute and compare to current time
-  timer_next = timer_next + TIMER_CYCLES_FAST;
-  timer_now = ESP.getCycleCount();
-  // Check If next is not in the past and handle overflow
-  // Cant we make this better with absolut values?
-  if (timer_next > timer_now || (timer_now <= 4294967296 && timer_next <= TIMER_CYCLES_FAST)) {
-    timer0_write(timer_next);
-  // If the ISR took to long, we indicate the error and start the ISR again immidiately
-  } else {
-    Serial.println(F("Info:Timer error"));
-    timer0_write(ESP.getCycleCount() + 1000);
-  }
-  sei();
+  if(cp_state) {
+     // Restore FPU registers
+     xthal_restore_cp0(cp0_regs);
+   } else {
+     // turn it back off
+     xthal_set_cpenable(0);
+   }
+   portEXIT_CRITICAL_ISR(&timerMux);
 }
 
+// _____________________________________________________________________________
 
 /****************************************************
  * A serial event occured
@@ -769,7 +849,7 @@ void handleJSON() {
     }
     // Set global sampling variable
     samplingRate = rate;
-    TIMER_CYCLES_FAST = (CLOCK * 1000000) / samplingRate; // Cycles between HW timer inerrupts
+    TIMER_CYCLES_FAST = (1000000) / samplingRate; // Cycles between HW timer inerrupts
     calcChunkSize();
 
     docSend["sampling_rate"] = samplingRate;
@@ -777,6 +857,8 @@ void handleJSON() {
     docSend["conn_type"] = typeC;
     docSend["timer_cycles"] = TIMER_CYCLES_FAST;
     docSend["cmd"] = CMD_SAMPLE;
+
+    relay.set(true);
 
     if (ts != 0) {
       response += F("Should sample at: ");
@@ -818,7 +900,7 @@ void handleJSON() {
     response += value ? F("On") : F("Off");
     docSend["msg"] = response;
     docSend["error"] = false;
-    switchRelay(RELAY_PIN, value);
+    relay.set(value);
   }
 
   /*********************** STOP COMMAND ****************************/
@@ -846,11 +928,14 @@ void handleJSON() {
   /*********************** RESTART COMMAND ****************************/
   // e.g. {"cmd":{"name":"restart"}}
   else if (strcmp(cmd, CMD_RESTART) == 0) {
-    stopSampling();
-    WiFi.forceSleepBegin();
-    wdt_reset();
     ESP.restart();
-    while(1) wdt_reset();
+  }
+
+  /*********************** RESTART COMMAND ****************************/
+  // e.g. {"cmd":{"name":"factoryReset"}}
+  else if (strcmp(cmd, CMD_RESET) == 0) {
+    config.makeDefault();
+    ESP.restart();
   }
 
   /*********************** INFO COMMAND ****************************/
@@ -858,9 +943,16 @@ void handleJSON() {
   else if (strcmp(cmd, CMD_INFO) == 0) {
     docSend["msg"] = F("WIFI powermeter");
     docSend["version"] = VERSION;
-    docSend["buffer_size"] = BUF_SIZE;
-    docSend["name"] = mdnsName;
+    docSend["buffer_size"] = PS_BUF_SIZE;
+    docSend["name"] = config.name;
     docSend["sampling_rate"] = samplingRate;
+    String ssids = "[";
+    for (int i = 0; i < config.numAPs; i++) {
+      ssids += config.wifiSSIDs[i];
+      ssids += ", ";
+    }
+    ssids += "]";
+    docSend["ssids"] = ssids;
   }
 
   /*********************** MDNS COMMAND ****************************/
@@ -872,16 +964,16 @@ void handleJSON() {
       docSend["msg"] = F("MDNS name required in payload with key name");
       return;
     }
-    if (strlen(newName) < MAX_MDNS_LEN) {
-      writeMDNS((char * )newName);
+    if (strlen(newName) < MAX_NAME_LEN) {
+      config.setName((char * )newName);
     } else {
       response = F("MDNS name too long, only string of size ");
-      response += MAX_MDNS_LEN;
+      response += MAX_NAME_LEN;
       response += F(" allowed");
       docSend["msg"] = response;
       return;
     }
-    char * name = getMDNS();
+    char * name = config.name;
     response = F("Set MDNS name to: ");
     response += name;
     //docSend["msg"] = sprintf( %s", name);
@@ -889,6 +981,88 @@ void handleJSON() {
     docSend["mdns_name"] = name;
     docSend["error"] = false;
     initMDNS();
+  }
+  /*********************** ADD WIFI COMMAND ****************************/
+  // e.g. {"cmd":{"name":"addWifi", "payload":{"ssid":"ssidName","pwd":"pwdName"}}}
+  else if (strcmp(cmd, CMD_ADD_WIFI) == 0) {
+    docSend["error"] = true;
+    const char* newSSID = docRcv["cmd"]["payload"]["ssid"];
+    const char* newPWD = docRcv["cmd"]["payload"]["pwd"];
+    if (newSSID == nullptr or newPWD == nullptr) {
+      docSend["msg"] = F("WiFi SSID and PWD required, for open networks, fill empty pwd");
+      return;
+    }
+    bool success = false;
+    if (strlen(newSSID) < MAX_SSID_LEN and strlen(newPWD) < MAX_PWD_LEN) {
+      success = config.addWiFi((char * )newSSID, (char * )newPWD);
+    } else {
+      response = F("SSID or PWD too long, max: ");
+      response += MAX_SSID_LEN;
+      response += F(", ");
+      response += MAX_PWD_LEN;
+      docSend["msg"] = response;
+      return;
+    }
+    if (success)  {
+      char * name = config.wifiSSIDs[config.numAPs-1];
+      char * pwd = config.wifiPWDs[config.numAPs-1];
+      response = F("New Ap, SSID: ");
+      response += name;
+      response = F(", PW: ");
+      response += pwd;
+      //docSend["msg"] = sprintf( %s", name);
+      docSend["ssid"] = name;
+      docSend["pwd"] = pwd;
+      docSend["error"] = false;
+    } else {
+      response = F("MAX # APs reached, need to delete first");
+    }
+
+    docSend["msg"] = response;
+    String ssids = "[";
+    for (int i = 0; i < config.numAPs; i++) {
+      ssids += config.wifiSSIDs[i];
+      ssids += ", ";
+    }
+    ssids += "]";
+    docSend["ssids"] = ssids;
+  }
+
+  /*********************** ADD WIFI COMMAND ****************************/
+  // e.g. {"cmd":{"name":"delWifi", "payload":{"ssid":"ssidName"}}}
+  else if (strcmp(cmd, CMD_REMOVE_WIFI) == 0) {
+    docSend["error"] = true;
+    const char* newSSID = docRcv["cmd"]["payload"]["ssid"];
+    if (newSSID == nullptr) {
+      docSend["msg"] = F("Required SSID to remove");
+      return;
+    }
+    bool success = false;
+    if (strlen(newSSID) < MAX_SSID_LEN) {
+      success = config.removeWiFi((char * )newSSID);
+    } else {
+      response = F("SSID too long, max: ");
+      response += MAX_SSID_LEN;
+      docSend["msg"] = response;
+      return;
+    }
+    if (success)  {
+      response = F("Removed SSID: ");
+      response += newSSID;
+      docSend["error"] = false;
+    } else {
+      response = F("SSID ");
+      response += newSSID;
+      response += F(" not found");
+    }
+    docSend["msg"] = response;
+    String ssids = "[";
+    for (int i = 0; i < config.numAPs; i++) {
+      ssids += config.wifiSSIDs[i];
+      ssids += ", ";
+    }
+    ssids += "]";
+    docSend["ssids"] = ssids;
   }
 
   /*********************** NTP COMMAND ****************************/
@@ -930,6 +1104,7 @@ bool tryConnectStream() {
  * will send EOF to the client
  ****************************************************/
 void stopSampling() {
+  vTaskDelete(TaskLoop2);
   state = STATE_IDLE;
   next_state = STATE_IDLE;
   turnInterrupt(false);
@@ -941,7 +1116,7 @@ void stopSampling() {
 }
 
 void calcChunkSize() {
-  chunkSize = min(max(MEASURMENT_BYTES, int(float(0.1*(float)(samplingRate*MEASURMENT_BYTES)))), BUF_SIZE/2);
+  chunkSize = min(max(MEASURMENT_BYTES, int(float(0.1*(float)(samplingRate*MEASURMENT_BYTES)))), MAX_SEND_SIZE);
   chunkSize--;
   chunkSize |= chunkSize >> 1;
   chunkSize |=chunkSize >> 2;
@@ -966,15 +1141,15 @@ inline void startSampling() {
 }
 
 void startSampling(bool waitVoltage) {
-  switchRelay(RELAY_PIN, true);
+  createPSRAM_TASK();
   counter = 0;
   sentSamples = 0;
   totalSamples = 0;
-  TIMER_CYCLES_FAST = (CLOCK * 1000000) / samplingRate; // Cycles between HW timer inerrupts
+  TIMER_CYCLES_FAST = (1000000) / samplingRate; // Cycles between HW timer inerrupts
   calcChunkSize();
   writePtr = 0;
-  nextWritePtr = 0;
-  readPtr = 0;
+  psdReadPtr = 0;
+  psdWritePtr = 0;
   samplingDuration = 0;
   packetNumber = 0;
   if (waitVoltage) {
@@ -983,6 +1158,7 @@ void startSampling(bool waitVoltage) {
   }
   startSamplingMillis = millis();
   turnInterrupt(true);
+
 }
 
 /****************************************************
@@ -991,21 +1167,14 @@ void startSampling(bool waitVoltage) {
 void turnInterrupt(bool on) {
   cli();//stop interrupts
   if (on) {
-    timer0_attachInterrupt(sample_ISR);
-    timer_next = ESP.getCycleCount() + TIMER_CYCLES_FAST;
-    freqCalcStart = micros();
-    timer0_write(timer_next);
+    timer_init();
+    timerAlarmWrite(timer, TIMER_CYCLES_FAST, true);
+    timerAlarmEnable(timer);
   } else {
-    timer0_detachInterrupt();
+    timerAlarmDisable(timer);
+    timer = NULL;
   }
   sei();
-}
-
-/****************************************************
- * Switch relay to open or closed
- ****************************************************/
-inline void switchRelay(int number, bool value) {
-  digitalWrite(number, value);
 }
 
 
@@ -1014,7 +1183,7 @@ inline void switchRelay(int number, bool value) {
  * stored in the eeprom, construct using prefix.
  ****************************************************/
 void initMDNS() {
-  char * name = getMDNS();
+  char * name = config.name;
   if (strlen(name) == 0) {
     Serial.print(F("Info:Sth wrong with mdns"));
     strcpy(name,"powerMeterX");
@@ -1027,31 +1196,10 @@ void initMDNS() {
   MDNS.addService("elec", "tcp", 54322);
 }
 
-char * getMDNS() {
-  uint16_t address = MDNS_START_ADDRESS;
-  uint8_t chars = 0;
-  EEPROM.get(address, chars);
-  address += sizeof(chars);
-  if (chars < MAX_MDNS_LEN) {
-    EEPROM.get(address, mdnsName);
-  }
-  return mdnsName;
-}
-
-void writeMDNS(char * newName) {
-  uint16_t address = MDNS_START_ADDRESS;
-  uint8_t chars = strlen(newName);
-  EEPROM.put(address, chars);
-  address += sizeof(chars);
-  for (uint8_t i = 0; i < chars; i++) EEPROM.put(address+i, newName[i]);
-  EEPROM.put(address+chars, '\0');
-  EEPROM.commit();
-}
-
 unsigned long lastTry = millis();
-void updateTime(bool forceUpdate) {
+void updateTime(bool ntp) {
   int32_t delta = millis()-ntpValidMillis;
-  if (forceUpdate or delta > 60000 && millis()-lastTry > 10000) {
+  if (ntp and delta > 60000 && millis()-lastTry > 10000) {
     getTimeNTP();
     lastTry = millis();
     delta = millis()-ntpValidMillis;
@@ -1154,4 +1302,12 @@ bool getTimeNTP() {
   Serial.println(printTime(ntpEpochSeconds, ntpMilliseconds));
   #endif
   return true;
+}
+
+
+void timer_init() {
+  // Timer base freq is 80Mhz
+  timer = NULL;
+  timer = timerBegin(0, 80, true);
+  timerAttachInterrupt(timer, &sample_ISR, true);
 }
