@@ -42,7 +42,10 @@ void Configuration::load() {
   // Load the MDNS name from eeprom
   EEPROM.begin(EEPROM_SIZE);
 
-  loadString(NAME_START_ADDRESS, name, MAX_NAME_LEN);
+  if (!loadString(NAME_START_ADDRESS, name, MAX_NAME_LEN)) {
+    makeDefault();
+    store();
+  }
   loadWiFi();
 }
 
@@ -56,6 +59,7 @@ bool Configuration::removeWiFi(char * ssid) {
   for (int ap = 0; ap < MAX_WIFI_APS; ap++) {
     if (strcmp(ssid, wifiSSIDs[ap]) == 0) {
       idx = ap;
+      break;
     }
   }
   if (idx == -1) return false;
@@ -64,8 +68,8 @@ bool Configuration::removeWiFi(char * ssid) {
     strcpy(wifiPWDs[i], wifiPWDs[i+1]);
   }
   // Indicate end of array here
-  strcpy(wifiSSIDs[numAPs], "");
-  strcpy(wifiPWDs[numAPs], "");
+  strcpy(wifiSSIDs[numAPs-1], "");
+  strcpy(wifiPWDs[numAPs-1], "");
 
   numAPs--;
   storeWiFi(); // Note a little bit overhead but who cares
@@ -78,6 +82,7 @@ bool Configuration::addWiFi(char * ssid, char * pwd) {
   strcpy(wifiPWDs[numAPs], pwd);
   numAPs++;
   storeWiFi(); // NOTE: a little bit overhead but who cares
+  return true;
 }
 
 void Configuration::loadWiFi() {
@@ -124,7 +129,9 @@ bool Configuration::loadString(unsigned int address, char * str, unsigned int ma
 bool Configuration::storeString(unsigned int address, char * str) {
   uint8_t chars = strlen(str);
   if (chars < MAX_STRING_LEN) {
-    for (uint8_t i = 0; i <= chars; i++) EEPROM.put(address+i, str[i]);
+    for (uint8_t i = 0; i <= chars; i++) {
+      EEPROM.put(address+i, str[i]);
+    }
     EEPROM.commit();
     return true;
   } else {

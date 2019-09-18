@@ -47,7 +47,6 @@ class Configuration {
     unsigned int numAPs;
     char wifiSSIDs[MAX_WIFI_APS][MAX_STRING_LEN];
     char wifiPWDs[MAX_WIFI_APS][MAX_STRING_LEN];
-
   private:
 
     bool storeString(unsigned int address, char * str);

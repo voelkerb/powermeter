@@ -10,96 +10,99 @@
 
 #include "rtc.h"
 
-RtcDS1307<TwoWire> _rtc(Wire);
+RTC_DS3231 _rtc;
 
 Rtc::Rtc(int intPin) {
   INT_PIN = intPin;
   _intCB = NULL;
   pinMode(INT_PIN, INPUT_PULLUP);
+  lost = true;
+  connected = false;
 }
 
 Rtc::Rtc() {
   INT_PIN = -1;
   _intCB = NULL;
+  connected = false;
+  lost = true;
 }
 
 void Rtc::init() {
 
-  _rtc.Begin();
+  _rtc.begin();
 
-   RtcDateTime compiled = RtcDateTime(__DATE__, __TIME__);
-
-   Serial.println(printTime(compiled));
-
-   if (!_rtc.IsDateTimeValid()) {
-    if (_rtc.LastError() != 0) {
-      Serial.print("RTC communications error = ");
-      Serial.println(_rtc.LastError());
-    } else {
-      Serial.println("RTC lost confidence in the DateTime!");
-      _rtc.SetDateTime(compiled);
-    }
-   }
-
-   if (!_rtc.GetIsRunning()) {
-     Serial.println("RTC was not actively running, starting now");
-     _rtc.SetIsRunning(true);
-   }
-
-   RtcDateTime now = _rtc.GetDateTime();
-   if (now < compiled) {
-     Serial.println("RTC is older than compile time!  (Updating DateTime)");
-     _rtc.SetDateTime(compiled);
-   } else if (now > compiled) {
-     Serial.println("RTC is newer than compile time. (this is expected)");
-   } else if (now == compiled) {
-     Serial.println("RTC is the same as compile time! (not expected but all is fine)");
-   }
+  // Read temperature to see a DS3231 is connected
+  float temp = _rtc.getTemperature();
+  Serial.print("Info:Temp:");
+  Serial.println(temp);
+  // If temperature is beyond normal, consider RTC to be not present
+  if (temp < 1 || temp > 70) {
+    Serial.println("Info:No RTC connected");
+    connected = false;
+    return;
+  } else {
+    connected = true;
+  }
+  // Indicate power loss, s.t. others know they cannot trust time
+  if (_rtc.lostPower()) {
+    lost = true;
+    // Set rtc time to compile time
+    _rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  }
 }
 
-void Rtc::enableInterrupt(int frequency, void (*cb)(void)) {
+void Rtc::setTime(DateTime dt) {
+  // Set the new time
+  _rtc.adjust(dt);
+  // Indicate time can be trusted now
+  lost = false;
+}
+
+bool Rtc::enableInterrupt(int frequency, void (*cb)(void)) {
   if (INT_PIN == -1) {
-    Serial.println("Need to init RTC with Pin to which RTC SQW out is connected");
-    return;
+    Serial.println("Info:Need to init RTC with Pin to which RTC SQW out is connected");
+    return false;
+  }
+  // does this reset the sqwc counter?
+  _rtc.adjust(_now);
+  if (frequency == 1) {
+    _rtc.writeSqwPinMode(DS3231_SquareWave1Hz);
+  } else if (frequency == 1024) {
+    _rtc.writeSqwPinMode(DS3231_SquareWave1kHz);
+  } else if (frequency == 4096) {
+    _rtc.writeSqwPinMode(DS3231_SquareWave4kHz);
+  } else if (frequency == 8192) {
+    _rtc.writeSqwPinMode(DS3231_SquareWave8kHz);
+  } else {
+    Serial.println("Unsupported RTC SQWV frequency");
+    return false;
   }
   // TODO: Frequency calculation and so on...
   // Currently 1 Hz
-  _rtc.SetSquareWavePin(DS1307SquareWaveOut_1Hz);
+  // _rtc.SetSquareWavePin(DS3231SquareWavePin_ModeClock);
   _intCB = cb;
-  attachInterrupt(digitalPinToInterrupt(INT_PIN), _intCB, RISING);
+  attachInterrupt(digitalPinToInterrupt(INT_PIN), _intCB, FALLING);
+  return true;
 }
 
 void Rtc::disableInterrupt() {
   detachInterrupt(digitalPinToInterrupt(INT_PIN));
 }
 
-void Rtc::update() {
-
-  if (!_rtc.IsDateTimeValid()) {
-    if (_rtc.LastError() != 0) {
-      Serial.print("RTC communications error = ");
-      Serial.println(_rtc.LastError());
-    } else {
-      Serial.println("RTC lost confidence in the DateTime!");
-    }
-  }
-
-  RtcDateTime now = _rtc.GetDateTime();
-
-  Serial.println(printTime(now));
+DateTime Rtc::update() {
+  if (!connected) return DateTime(F(__DATE__), F(__TIME__));
+  _now = _rtc.now();
+  Serial.print("Info:");
+  Serial.println(timeStr(_now));
+  return _now;
 }
 
-#define countof(a) (sizeof(a) / sizeof(a[0]))
 
-char * Rtc::printTime(const RtcDateTime& dt) {
-    snprintf_P(datestring,
-            countof(datestring),
-            PSTR("%02u/%02u/%04u %02u:%02u:%02u"),
-            dt.Month(),
-            dt.Day(),
-            dt.Year(),
-            dt.Hour(),
-            dt.Minute(),
-            dt.Second() );
-    return &datestring[0];
+char * Rtc::timeStr(DateTime dt) {
+    sprintf(_timeStr, "%02u/%02u/%04u %02u:%02u:%02u", dt.month(), dt.day(),
+            dt.year(),
+            dt.hour(),
+            dt.minute(),
+            dt.second() );
+    return &_timeStr[0];
 }

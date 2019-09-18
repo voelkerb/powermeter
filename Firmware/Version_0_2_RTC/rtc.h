@@ -12,8 +12,7 @@
 #define RTC_h
 
 #include <Wire.h> // must be included here so that Arduino library object file references work
-#include <RtcDS1307.h>
-#include <TimeLib.h>
+#include <RTClib.h>
 
 #if (ARDUINO >= 100)
 #include "Arduino.h"
@@ -26,14 +25,20 @@ class Rtc {
     Rtc();
     Rtc(int intPin);
     void init();
-    void update();
-    void enableInterrupt(int frequency, void (*cb)(void));
+    DateTime update();
+    bool enableInterrupt(int frequency, void (*cb)(void));
     void disableInterrupt();
-    char * printTime(const RtcDateTime& dt);
+    void setTime(DateTime dt);
+    char * timeStr(DateTime dt);
 
+    bool connected;
+    bool lost;
+
+    DateTime _now;
   private:
     char datestring[20];
     int INT_PIN;
+    char _timeStr[50];
 
     void (*_intCB)(void);
 };

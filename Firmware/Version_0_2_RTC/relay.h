@@ -26,8 +26,8 @@ class Relay {
     void set(bool value);
     int state;
   private:
-    uint8_t SET_PIN;
-    uint8_t RES_PIN;
+    uint8_t _SET_PIN;
+    uint8_t _RES_PIN;
 };
 
 #endif
