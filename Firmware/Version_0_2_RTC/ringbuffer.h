@@ -26,6 +26,8 @@ class RingBuffer {
     bool write(uint8_t * data, uint32_t size);
     bool read(uint8_t * data, uint32_t size);
     void reset();
+    bool inPSRAM();
+    size_t getSize();
     uint32_t available();
     uint32_t availableForWrite();
   private:
@@ -38,6 +40,8 @@ class RingBuffer {
     uint32_t _writePtr;
     // Buffer pointer
     uint8_t* _buffer;
+    // esp_himem_handle_t _memoryHandle;
+    // esp_himem_rangehandle_t _rangeHandle;
     // If ps ram should be used for the buffer
     bool _psram;
 };

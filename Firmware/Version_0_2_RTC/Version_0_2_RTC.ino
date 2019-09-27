@@ -65,10 +65,9 @@ volatile long nowTs = 0;
 volatile long lastTs = 0;
 
 // Buffering stuff
-// Number of bytes for one measurement
 #define MAX_SEND_SIZE 512 // 1024
 // Chunk sizes of data to send
-const int PS_BUF_SIZE = 3*1024*1024;
+const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 
 RingBuffer ringBuffer(PS_BUF_SIZE, true);
 
@@ -144,7 +143,7 @@ WiFiClient streamClient;
 // UDP used for streaming
 WiFiUDP udpClient;
 
-#define COMMAND_MAX_SIZE 200
+#define COMMAND_MAX_SIZE 300
 char command[COMMAND_MAX_SIZE] = {'\0'};
 StaticJsonDocument<2*COMMAND_MAX_SIZE> docRcv;
 StaticJsonDocument<2*COMMAND_MAX_SIZE> docSend;
@@ -201,6 +200,59 @@ volatile bool sqwFlag = false;
 
 bool firstSqwv = true;
 
+volatile float values[4] = {0};
+
+// FPU register state
+uint32_t cp0_regs[18];
+
+/****************************************************
+ * ISR for sampling
+ ****************************************************/
+void IRAM_ATTR sample_ISR(){
+
+  portENTER_CRITICAL_ISR(&timerMux);
+  // get FPU state
+  uint32_t cp_state = xthal_get_cpenable();
+
+  // if it was enabled, save FPU registers
+  if(cp_state) {
+    xthal_save_cp0(cp0_regs);
+  // Else enable it
+  } else {
+    xthal_set_cpenable(1);
+  }
+
+  // Vaiables for frequency count
+  counter++;
+  totalSamples++;
+  if (counter >= streamConfig.samplingRate) {
+    freqCalcNow = micros();
+    freq = freqCalcNow-freqCalcStart;
+    freqCalcStart = freqCalcNow;
+    counter = 0;
+    if (rtc.connected) timerAlarmDisable(timer);
+  }
+
+  if (streamConfig.measures == STATE_VI) {
+    stpm34.readVoltageAndCurrent(1, (float*) &values[0], (float*) &values[1]);
+  } else if (streamConfig.measures == STATE_PQ) {
+    stpm34.readPower(1, (float*) &values[0], (float*) &values[2], (float*) &values[1], (float*) &values[2]);
+  } else if (streamConfig.measures == STATE_VIPQ) {
+    stpm34.readAll(1, (float*) &values[0], (float*) &values[1], (float*) &values[2], (float*) &values[3]);
+  }
+
+  ringBuffer.write((uint8_t*)&values[0], streamConfig.measurementBytes);
+
+  if(cp_state) {
+     // Restore FPU registers
+     xthal_restore_cp0(cp0_regs);
+   } else {
+     // turn it back off
+     xthal_set_cpenable(0);
+   }
+   portEXIT_CRITICAL_ISR(&timerMux);
+}
+
 // Checks if motion was detected, sets LED HIGH and starts a timer
 void IRAM_ATTR sqwvTriggered() {
   // Disable timer if not already done in ISR
@@ -215,7 +267,8 @@ void IRAM_ATTR sqwvTriggered() {
   // If we set the timer to 0, the last sample might be missed,
   // if the sqwv is triggered before the last sample is sampled
   // If we set it to half, we have the largest margin
-  timerWrite(timer, TIMER_CYCLES_FAST/2);
+  timerWrite(timer, 0);
+  sample_ISR();
   // Enable timer
   timerAlarmEnable(timer);
   // indicate to main
@@ -248,8 +301,9 @@ void setup() {
     Serial.println("Info:ps_malloc failed");
   }
 
-  //config.makeDefault();
-  //config.store();
+
+  // config.makeDefault();
+  // config.store();
 
 
   timer_init();
@@ -292,6 +346,9 @@ void setup() {
 
   response.reserve(2*COMMAND_MAX_SIZE);
 
+
+  setInfoString(&command[0]);
+  Serial.println(command);
 
   Serial.println(F("Info:Setup done"));
 
@@ -553,58 +610,6 @@ void writeData(Stream &getter, uint16_t size) {
   if (sent > start) sentSamples += (sent-start)/streamConfig.measurementBytes;
 }
 
-volatile float values[4] = {0};
-
-// FPU register state
-uint32_t cp0_regs[18];
-
-/****************************************************
- * ISR for sampling
- ****************************************************/
-void IRAM_ATTR sample_ISR(){
-
-  portENTER_CRITICAL_ISR(&timerMux);
-  // get FPU state
-  uint32_t cp_state = xthal_get_cpenable();
-
-  // if it was enabled, save FPU registers
-  if(cp_state) {
-    xthal_save_cp0(cp0_regs);
-  // Else enable it
-  } else {
-    xthal_set_cpenable(1);
-  }
-
-  // Vaiables for frequency count
-  counter++;
-  totalSamples++;
-  if (counter >= streamConfig.samplingRate) {
-    freqCalcNow = micros();
-    freq = freqCalcNow-freqCalcStart;
-    freqCalcStart = freqCalcNow;
-    counter = 0;
-    if (rtc.connected) timerAlarmDisable(timer);
-  }
-
-  if (streamConfig.measures == STATE_VI) {
-    stpm34.readVoltageAndCurrent(1, (float*) &values[0], (float*) &values[1]);
-  } else if (streamConfig.measures == STATE_PQ) {
-    stpm34.readPower(1, (float*) &values[0], (float*) &values[2], (float*) &values[1], (float*) &values[2]);
-  } else if (streamConfig.measures == STATE_VIPQ) {
-    stpm34.readAll(1, (float*) &values[0], (float*) &values[1], (float*) &values[2], (float*) &values[3]);
-  }
-
-  ringBuffer.write((uint8_t*)&values[0], streamConfig.measurementBytes);
-
-  if(cp_state) {
-     // Restore FPU registers
-     xthal_restore_cp0(cp0_regs);
-   } else {
-     // turn it back off
-     xthal_set_cpenable(0);
-   }
-   portEXIT_CRITICAL_ISR(&timerMux);
-}
 
 
 void setupOTA() {
@@ -882,9 +887,13 @@ void handleJSON() {
   else if (strcmp(cmd, CMD_INFO) == 0) {
     docSend["msg"] = F("WIFI powermeter");
     docSend["version"] = VERSION;
-    docSend["buffer_size"] = PS_BUF_SIZE;
     docSend["name"] = config.name;
     docSend["sampling_rate"] = streamConfig.samplingRate;
+    /*
+    docSend["buffer_size"] = ringBuffer.getSize();
+    docSend["psram"] = ringBuffer.inPSRAM();
+    docSend["rtc"] = rtc.connected;
+    docSend["system_time"] = printCurrentTime();*/
     String ssids = "[";
     for (int i = 0; i < config.numAPs; i++) {
       ssids += config.wifiSSIDs[i];
@@ -1152,22 +1161,24 @@ void initMDNS() {
   MDNS.addService("elec", "tcp", STANDARD_TCP_STREAM_PORT);
 }
 
+TaskHandle_t ntpTaskHandle = NULL;
 unsigned long lastTry = millis();
 void updateTimeInBG( void * pvParameters ) {
   int32_t delta = millis()-ntpValidMillis;
   getTimeNTP();
-  lastTry = millis();
   delta = millis()-ntpValidMillis;
 
-  if (ntpEpochSeconds == 0) return;
-  currentMilliseconds = ntpMilliseconds + delta%1000;
-  currentSeconds = ntpEpochSeconds + delta/1000 + currentMilliseconds/1000;
-  currentMilliseconds = currentMilliseconds%1000;
-  if (rtc.connected and rtc.lost) {
-    unsigned long slocal = currentSeconds + LOCATION_OFFSET;
-    DateTime ntpNow(year(slocal), month(slocal), day(slocal), hour(slocal), minute(slocal), second(slocal));
-    rtc.setTime(ntpNow);
+  if (ntpEpochSeconds != 0) {
+    currentMilliseconds = ntpMilliseconds + delta%1000;
+    currentSeconds = ntpEpochSeconds + delta/1000 + currentMilliseconds/1000;
+    currentMilliseconds = currentMilliseconds%1000;
+    if (rtc.connected and rtc.lost) {
+      unsigned long slocal = currentSeconds + LOCATION_OFFSET;
+      DateTime ntpNow(year(slocal), month(slocal), day(slocal), hour(slocal), minute(slocal), second(slocal));
+      rtc.setTime(ntpNow);
+    }
   }
+  ntpTaskHandle = NULL;
   vTaskDelete( NULL );
 }
 
@@ -1179,15 +1190,20 @@ void updateTime(bool ntp) {
     delta = millis()-ntpValidMillis;
   }
   if (((delta > 60000) && (millis()-lastTry > 10000))) {
-    // let it check on second core (not in loop)
-    xTaskCreatePinnedToCore(
-                      updateTimeInBG,   /* Function to implement the task */
-                      "timeUpdateTask", /* Name of the task */
-                      10000,      /* Stack size in words */
-                      NULL,       /* Task input parameter */
-                      0,          /* Priority of the task */
-                      NULL,       /* Task handle. */
-                      0);  /* Core where the task should run */
+    lastTry = millis();
+    if (ntpTaskHandle == NULL) {
+      // let it check on second core (not in loop)
+      xTaskCreatePinnedToCore(
+                        updateTimeInBG,   /* Function to implement the task */
+                        "timeUpdateTask", /* Name of the task */
+                        10000,      /* Stack size in words */
+                        NULL,       /* Task input parameter */
+                        0,          /* Priority of the task */
+                        &ntpTaskHandle,       /* Task handle. */
+                        0);  /* Core where the task should run */
+    } else {
+      Serial.println("Info: Task Handle not none");
+    }
   }
   if (ntpEpochSeconds == 0) return;
   currentMilliseconds = ntpMilliseconds + delta%1000;
@@ -1283,4 +1299,38 @@ bool getTimeNTP() {
   Serial.println(printTime(ntpEpochSeconds, ntpMilliseconds));
   #endif
   return true;
+}
+
+// Make sure enough memory is allocated for str
+void setInfoString(char * str) {
+  int idx = 0;
+  idx += sprintf(&str[idx], "\n");
+  // Name and firmware
+  idx += sprintf(&str[idx], "Info: %s @ firmware: %s/%s", config.name, __DATE__, __TIME__);
+  idx += sprintf(&str[idx], "\nUsing %d bytes ", ringBuffer.getSize());
+  // PSRAM or not
+  if (ringBuffer.inPSRAM()) {
+    idx += sprintf(&str[idx], "PSRAM");
+  } else {
+    idx += sprintf(&str[idx], "RAM");
+  }
+  if (rtc.connected) {
+    idx += sprintf(&str[idx], "\nRTC is connected ");
+    if (rtc.lost) {
+      idx += sprintf(&str[idx], "but has lost time");
+    } else {
+      idx += sprintf(&str[idx], "and has valid time");
+    }
+  } else {
+    idx += sprintf(&str[idx], "\nNo RTC");
+  }
+  idx += sprintf(&str[idx], "\nCurrent system time: ToImplement");
+  // All SSIDs
+  String ssids = "";
+  for (int i = 0; i < config.numAPs; i++) {
+    ssids += config.wifiSSIDs[i];
+    if (i < config.numAPs-1) ssids += ", ";
+  }
+  idx += sprintf(&str[idx], "\nKnown Networks: [%s]", ssids.c_str());
+  idx += sprintf(&str[idx], "\n");
 }

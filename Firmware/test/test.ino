@@ -8,15 +8,25 @@ const int N = 3*1024*1024+1020;
 byte* buff;
 
 void setup() {
-  Serial.begin(115200);
-  esp_spiram_init();
-  printf("spiram size %u\n", esp_spiram_get_size());
-  printf("himem free %u\n", esp_himem_get_free_size());
-  printf("himem phys %u\n", esp_himem_get_phys_size());
-  printf("himem reserved %u\n", esp_himem_reserved_area_size());
-  Serial.printf("spiram size %u\n", esp_spiram_get_size());
-  // Free Memory
-  Serial.printf("\n%d Bytes free.\n\n", ESP.getFreeHeap());
+  Serial.begin(2000000);
+
+  Serial.println("========================================");
+  Serial.printf("PSRAM total size     : %u \n", esp_spiram_get_size());
+  Serial.println("----------------------------------------");
+  Serial.printf("PSRAM first 4MB size : %u \n", ESP.getPsramSize());
+  Serial.printf("PSRAM first 4MB free : %u \n", ESP.getMaxAllocPsram());
+  Serial.printf("PSRAM HI-MEM    size : %u \n", esp_himem_get_phys_size());
+  Serial.printf("PSRAM HI-MEM    free : %u \n", esp_himem_get_free_size());
+  Serial.println("========================================");
+  Serial.printf("Internal RAM  size   : %u \n", ESP.getHeapSize());
+  Serial.printf("Internal RAM  free   : %u \n", ESP.getFreeHeap());
+  Serial.println("========================================");
+
+  Serial.println("Testing the free memory of PSRAM HI-MEM ...");
+
+
+
+
   // ps_malloc
   if (buff = (byte*)ps_malloc(sizeof(byte)*N))
     Serial.println("ps_malloc succeeded");

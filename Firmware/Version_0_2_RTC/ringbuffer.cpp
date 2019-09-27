@@ -29,8 +29,23 @@ bool RingBuffer::init() {
   // You cannot init twice
   if (_buffer != NULL) return true;
 
-  if (_psram) _buffer = (uint8_t*)ps_malloc(_ring_buffer_size);
-  else _buffer = (uint8_t*)malloc(_ring_buffer_size);
+  // // Allocate the memory
+  // ESP_ERROR_CHECK(esp_himem_alloc(_ring_buffer_size, &_memoryHandle));
+  // //Allocate a block of address range
+  // ESP_ERROR_CHECK(esp_himem_alloc_map_range(ESP_HIMEM_BLKSZ, &_rangeHandle));
+  //
+  // for (int i = 0; i < _ring_buffer_size; i += ESP_HIMEM_BLKSZ) {
+  //     uint32_t *ptr = NULL;
+  //     //Map in block, write pseudo-random data, unmap block.
+  //     ESP_ERROR_CHECK(esp_himem_map(_memoryHandle, _rangeHandle, i, 0, ESP_HIMEM_BLKSZ, 0, (void**)&ptr));
+  //     fill_mem_seed(i ^ seed, ptr, ESP_HIMEM_BLKSZ); //
+  //     ESP_ERROR_CHECK(esp_himem_unmap(rh, ptr, ESP_HIMEM_BLKSZ));
+  // }
+
+  if (_psram) {
+    _buffer = (uint8_t*)ps_malloc(_ring_buffer_size);
+    if (_buffer == NULL) _psram = false;
+  } else _buffer = (uint8_t*)malloc(_ring_buffer_size);
 
   // Return success or not
   if (_buffer != NULL) return true;
@@ -84,4 +99,12 @@ uint32_t RingBuffer::_rwDistance() {
 uint32_t RingBuffer::_wrDistance() {
   if (_readPtr < _writePtr) return _readPtr + (_ring_buffer_size - _writePtr);
   else return _readPtr - _writePtr;
+}
+
+bool RingBuffer::inPSRAM() {
+  return _psram;
+}
+
+size_t RingBuffer::getSize() {
+  return _ring_buffer_size;
 }

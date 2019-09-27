@@ -138,8 +138,6 @@ void Network::init(Configuration * config, void (*onConnect)(void), void (*onDis
   _onConnect = onConnect;
   _onDisconnect = onDisconnect;
   WiFi.onEvent(wifiEvent);
-  // At first we want to be in station and access point mode
-  WiFi.setHostname(_config->name);
   WiFi.mode(WIFI_STA);
   // Disable wifi power saving
   esp_wifi_set_ps(WIFI_PS_NONE);
@@ -154,6 +152,8 @@ bool Network::connect(char * network, char * pswd) {
   #endif
   WiFi.mode(WIFI_STA);
   WiFi.begin(network, pswd);
+  // Set the hostname
+  WiFi.setHostname(_config->name);
   long start = millis();
   while (WiFi.status() != WL_CONNECTED) {
     yield();
