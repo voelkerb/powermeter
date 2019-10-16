@@ -22,7 +22,7 @@
 #include "WProgram.h"
 #endif
 
-#define DEBUG
+// #define DEBUG
 // #define DEBUG_DEEP
 
 
@@ -36,8 +36,10 @@ class STPM {
   public:
     STPM(int resetPin, int csPin, int synPin);
     STPM(int resetPin, int csPin);
-    void init();
+    bool init();
     void setCurrentGain(uint8_t channel, Gain gain);
+    bool checkGain(uint8_t channel, uint8_t *buffer);
+
     void readAll(uint8_t channel, float *voltage, float *current, float* active, float* reactive);
     float readTotalActiveEnergy();
     float readTotalFundamentalEnergy();
@@ -69,7 +71,7 @@ class STPM {
     void CRC(bool enabled);
 
   private:
-    void Init_STPM34();
+    bool Init_STPM34();
     void readFrame(uint8_t address, uint8_t *buffer);
     void sendFrame(uint8_t readAdd, uint8_t writeAdd, uint8_t dataLSB, uint8_t dataMSB);
     void sendFrameCRC(uint8_t readAdd, uint8_t writeAdd, uint8_t dataLSB, uint8_t dataMSB);
@@ -102,6 +104,8 @@ class STPM {
     uint8_t address;
     bool _autoLatch;
     bool _crcEnabled;
+    Gain _gain1;
+    Gain _gain2;
     uint8_t readBuffer[10];
 
 };

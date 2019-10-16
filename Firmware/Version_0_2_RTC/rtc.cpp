@@ -12,34 +12,27 @@
 
 RTC_DS3231 _rtc;
 
-Rtc::Rtc(int intPin) {
+Rtc::Rtc(int intPin) : logger(MultiLogger::getInstance()) {
   INT_PIN = intPin;
   _intCB = NULL;
-  pinMode(INT_PIN, INPUT_PULLUP);
   lost = true;
   connected = false;
 }
 
-Rtc::Rtc() {
-  INT_PIN = -1;
-  _intCB = NULL;
-  connected = false;
-  lost = true;
-}
 
-void Rtc::init() {
+bool Rtc::init() {
 
+  if (INT_PIN >= 0) pinMode(INT_PIN, INPUT_PULLUP);
   _rtc.begin();
 
   // Read temperature to see a DS3231 is connected
   float temp = _rtc.getTemperature();
-  Serial.print("Info:Temp:");
-  Serial.println(temp);
+  logger.log("Temp: %.2f", temp);
   // If temperature is beyond normal, consider RTC to be not present
   if (temp < 1 || temp > 70) {
-    Serial.println("Info:No RTC connected");
+    logger.log("No RTC connected");
     connected = false;
-    return;
+    return false;
   } else {
     connected = true;
   }
@@ -49,6 +42,7 @@ void Rtc::init() {
     // Set rtc time to compile time
     _rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
   }
+  return true;
 }
 
 void Rtc::setTime(DateTime dt) {
@@ -60,7 +54,7 @@ void Rtc::setTime(DateTime dt) {
 
 bool Rtc::enableInterrupt(int frequency, void (*cb)(void)) {
   if (INT_PIN == -1) {
-    Serial.println("Info:Need to init RTC with Pin to which RTC SQW out is connected");
+    logger.log("Need to init RTC with Pin to which RTC SQW out is connected");
     return false;
   }
   // does this reset the sqwc counter?
@@ -74,7 +68,7 @@ bool Rtc::enableInterrupt(int frequency, void (*cb)(void)) {
   } else if (frequency == 8192) {
     _rtc.writeSqwPinMode(DS3231_SquareWave8kHz);
   } else {
-    Serial.println("Unsupported RTC SQWV frequency");
+    logger.log("Unsupported RTC SQWV frequency");
     return false;
   }
   // TODO: Frequency calculation and so on...
@@ -92,8 +86,6 @@ void Rtc::disableInterrupt() {
 DateTime Rtc::update() {
   if (!connected) return DateTime(F(__DATE__), F(__TIME__));
   _now = _rtc.now();
-  Serial.print("Info:");
-  Serial.println(timeStr(_now));
   return _now;
 }
 

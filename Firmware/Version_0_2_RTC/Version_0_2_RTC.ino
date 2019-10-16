@@ -1,42 +1,98 @@
+#include <Arduino.h>
 #include <SPI.h>
 #include "STPM.h"
 #include <esp_wifi.h>
 #include <WiFi.h>
 #include <WiFiAP.h>
 // #include <esp_wifi.h>
-#include "esp_deep_sleep.h"
+#include "esp_sleep.h"
 #include <time.h>
 #include <ArduinoJson.h>
 #include <TimeLib.h>
 #include <ESPmDNS.h>
 /* for normal hardware wire use below */
 #include "esp_bt.h"
+#include <esp_int_wdt.h>
+#include <esp_task_wdt.h>
+#include "esp32-hal-cpu.h"
+
 #include "relay.h"
 #include "rtc.h"
 #include "config.h"
 #include "ringbuffer.h"
 #include "network.h"
-#include <esp_int_wdt.h>
-#include <esp_task_wdt.h>
+#include "timeHandling.h"
+#include "logger.h"
+
 
 // Arduino Updater
 #include <ArduinoOTA.h>
 
 
-
-
-
-
 // Serial Speed and DEBUG option
 #define SERIAL_SPEED 2000000
-#define DEBUG
+// #define DEBUG_DEEP
 #define SENT_LIFENESS_TO_CLIENTS
 
 
 #define VERSION "0.2_x_rtc"
+
+
+// Function prototypes required for e.g. platformio
+void calcChunkSize();
+bool getTimeNTP();
+void handleEvent(Stream &getter);
+void handleJSON();
+void initMDNS();
+void onIdle();
+void onSampling();
+void onWifiConnect();
+void onWifiDisconnect();
+char * printCurrentTime();
+char * printDuration(unsigned long ms);
+char * printTime(unsigned long s, unsigned long ms);
+void IRAM_ATTR sample_ISR();
+void setInfoString(char * str);
+void setupOTA();
+void IRAM_ATTR sqwvTriggered();
+inline void startSampling();
+void startSampling(bool waitVoltage);
+void stopSampling();
+void timer_init();
+void turnInterrupt(bool on);
+void updateTime(bool ntp);
+void updateTimeInBG(void * pvParameters);
+void writeChunks(bool tail);
+void writeData(Stream &getter, uint16_t size);
+char * timeStr();
+
+
+
+
+
+
+
+
+
 #define STANDARD_UDP_PORT 54323
 #define STANDARD_TCP_SAMPLE_PORT 54321
 #define STANDARD_TCP_STREAM_PORT 54322
+
+
+const char logPrefixSerial[] = "";
+const char logPrefix[] = "Info:";
+
+// Serial logger
+StreamLogger serialLog((Stream*)&Serial, &timeStr, &logPrefixSerial[0], ALL);
+
+// TCP logger
+StreamLogger streamLog((Stream*)NULL, &timeStr, &logPrefix[0], INFO);
+
+// MultiLogger logger(&streamLog, &timeStr);
+// Create singleton herer
+MultiLogger& logger = MultiLogger::getInstance();
+
+const int ERROR_LED = 13;
 
 Configuration config;
 
@@ -54,6 +110,8 @@ Relay relay(RELAY_PIN_S, RELAY_PIN_R);
 
 const int RTC_INT = 25;
 Rtc rtc(RTC_INT);
+const char* ntpServerName = "time.uni-freiburg.de";//"0.de.pool.ntp.org";
+TimeHandler myTime(&rtc, ntpServerName);
 
 // STPM Object
 STPM stpm34(STPM_RES, STPM_CS, STPM_SYN);
@@ -117,7 +175,7 @@ SampleState next_state = STATE_IDLE;
 // Available measures are VOLTAGE+CURRENT, ACTIVE+REACTIVE Power or both
 enum Measures{STATE_VI, STATE_PQ, STATE_VIPQ};
 
-typedef struct StreamConfig {
+struct StreamConfig {
   bool prefix = false;                      // Send data with "data:" prefix
   Measures measures = STATE_VI;             // The measures to send
   uint8_t measurementBytes = 8;             // Number of bytes for each measurement entry
@@ -137,22 +195,22 @@ volatile long freqCalcStart;
 volatile long freqCalcNow;
 volatile long freq = 0;
 
-
+bool tcpConnected = false;
 WiFiClient tcpClient;
 WiFiClient streamClient;
 // UDP used for streaming
 WiFiUDP udpClient;
 
-#define COMMAND_MAX_SIZE 300
+#define COMMAND_MAX_SIZE 400
 char command[COMMAND_MAX_SIZE] = {'\0'};
 StaticJsonDocument<2*COMMAND_MAX_SIZE> docRcv;
 StaticJsonDocument<2*COMMAND_MAX_SIZE> docSend;
 String response = "";
 
+/*
 #define LOCATION_OFFSET (2*60*60)
 IPAddress timeServerIP; // time.nist.gov NTP server address
 // Use local tcp server with hopefully a small ping
-const char* ntpServerName = "time.uni-freiburg.de";//"0.de.pool.ntp.org";
 unsigned int localNTPPort = 2390; // local port to listen for UDP packets
 const int NTP_PACKET_SIZE = 48; // NTP time stamp is in the first 48 bytes
 byte ntpBuffer[NTP_PACKET_SIZE]; //buffer to hold incoming and outgoing
@@ -164,6 +222,7 @@ unsigned long ntpMilliseconds = 0;
 
 unsigned long currentSeconds = 0;
 unsigned long currentMilliseconds = 0;
+*/
 
 unsigned long samplingCountdown = 0;
 unsigned long startSamplingMillis = 0;
@@ -182,28 +241,348 @@ hw_timer_t * timer = NULL;
 portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
 unsigned int coreFreq = 0;
 
-TaskHandle_t TaskCore2;
-#include "esp32-hal-cpu.h"
-
-
-extern "C" {
-  #include <esp_spiram.h>
-  #include <esp_himem.h>
-}
-
-TaskHandle_t TaskLoop2;
 
 long testMillis = 0;
 long testMillis2 = 0;
 uint16_t testSamples = 0;
-volatile bool sqwFlag = false;
+volatile int sqwCounter = 0;
 
+portMUX_TYPE sqwMux = portMUX_INITIALIZER_UNLOCKED;
 bool firstSqwv = true;
 
 volatile float values[4] = {0};
 
 // FPU register state
 uint32_t cp0_regs[18];
+
+
+/************************ SETUP *************************/
+void setup() {
+  // Init the logging module
+  logger.setTimeGetter(&timeStr);
+  // Setup serial communication
+  Serial.begin(SERIAL_SPEED);
+  // Add Serial logger
+  logger.addLogger(&serialLog);
+
+  relay.set(true);
+  // We do not need bluetooth, so disable it
+  esp_bt_controller_disable();
+  pinMode(ERROR_LED, OUTPUT);
+
+  // Indicate lifeness / reset
+  digitalWrite(ERROR_LED, HIGH);
+  delay(200);
+  digitalWrite(ERROR_LED, LOW);
+  delay(200);
+  digitalWrite(ERROR_LED, HIGH);
+
+
+  config.load();
+
+  coreFreq = getCpuFrequencyMhz();
+  logger.log(DEBUG, "%s @ firmware %s/%s", config.name, __DATE__, __TIME__);
+  logger.log(DEBUG, "Core @ %u MHz", coreFreq);
+
+  bool success = ringBuffer.init();
+  if (success) {
+    logger.log(DEBUG, "Allocated %u Bytes of RAM\n", PS_BUF_SIZE);
+  } else {
+    logger.log(ERROR, "ps_malloc failed");
+  }
+
+  // config.makeDefault();
+  // config.store();
+
+  timer_init();
+
+  // Setup STPM 32
+  success = success && stpm34.init();
+
+  success = success && rtc.init();
+
+  // Indicate error if there is any
+  digitalWrite(ERROR_LED, !success);
+
+  logger.log(ALL, "Connecting WLAN");
+
+  Network::init(&config, onWifiConnect, onWifiDisconnect);
+  setupOTA();
+
+  response.reserve(2*COMMAND_MAX_SIZE);
+
+
+  setInfoString(&command[0]);
+  logger.log(&command[0]);
+
+  logger.log(ALL, "Setup done");
+
+  lifenessUpdate = millis();
+  mdnsUpdate = millis();
+  wifiUpdate = millis();
+}
+
+// the loop routine runs over and over again forever:
+void loop() {
+
+  // Stuff done on idle
+  if (state == STATE_IDLE) {
+    onIdle();
+  // Stuff on sampling
+  } else if (state == STATE_SAMPLE) {
+    onSampling();
+  }
+
+  // If we only have 200 ms before sampling should start, wait actively
+  if (next_state != STATE_IDLE) {
+    if (streamConfig.countdown != 0 and (streamConfig.countdown - millis()) < 200) {
+      // Disable any wifi sleep mode
+      esp_wifi_set_ps(WIFI_PS_NONE);
+      state = next_state;
+      logger.log(DEBUG, "StartSampling @ %s", myTime.timeStr());
+      // Calculate time to wait
+      int32_t mydelta = streamConfig.countdown - millis();
+      // Waiting here is not nice, but we wait for zero crossing
+      if (mydelta > 0) delay(mydelta-1);
+      startSampling(true);
+      // Reset sampling countdown
+      streamConfig.countdown = 0;
+    }
+  }
+
+  // Handle serial requests
+  if (Serial.available()) {
+    handleEvent(Serial);
+  }
+  // Handle tcp requests
+  if (tcpClient.available() > 0) {
+    handleEvent(tcpClient);
+  }
+
+  // Watchdog
+  yield();
+}
+
+char * timeStr() {
+  return myTime.timeStr(true);
+}
+
+void onWifiConnect() {
+  logger.log(ALL, "Wifi Connected");
+  logger.log(ALL, "IP: %s", WiFi.localIP().toString().c_str());
+  // The stuff todo if we have a network connection (and hopefully internet as well)
+  if (Network::connected and not Network::apMode) {
+    myTime.updateNTPTime();
+  }
+
+  // Reinit mdns
+  initMDNS();
+  // Start the TCP server
+  server.begin();
+  streamServer.begin();
+
+  // udpNtp.begin(localNTPPort);
+  // getTimeNTP();
+
+  // Reset lifeness and MDNS update
+  lifenessUpdate = millis();
+  mdnsUpdate = millis();
+}
+
+void onWifiDisconnect() {
+  logger.log(ERROR, "Wifi Disconnected");
+
+  if (state != STATE_IDLE) {
+    logger.log(ERROR, "Stop sampling (Wifi disconnect)");
+    stopSampling();
+  }
+}
+
+void onIdle() {
+  // Arduino OTA
+  ArduinoOTA.handle();
+
+  // Re-advertise MDNS service service every 30s 
+  // TODO: no clue why, but does not work properly for esp32 (maybe it is the mac side)
+  if ((long)(millis() - mdnsUpdate) >= 0) {
+    initMDNS();
+    //MDNS.addService("_elec", "_tcp", STANDARD_TCP_STREAM_PORT);
+    mdnsUpdate += 30000;
+  }
+
+  // Update lifeness only on idle every second
+  if ((long)(millis() - lifenessUpdate) >= 0) {
+    if (rtc.connected) rtc.update();
+    lifenessUpdate += 1000;
+    logger.log("");
+    // logger.log(ERROR, "test");
+    // logger.log(WARNING, "test");
+    // logger.log(DEBUG, "test");
+    // logger.log(ALL, "test");
+  }
+
+  // Handle tcp client connections
+  if (!tcpClient.connected()) {
+    if (tcpConnected) {
+      onClientDisconnect(tcpClient);
+      tcpConnected = false;
+    }
+    // Look for people connecting over the server
+    tcpClient = server.available();
+    if (tcpClient.connected()) {
+      tcpConnected = true;
+      // Set new udp ip
+      streamConfig.ip = tcpClient.remoteIP();
+      streamConfig.port = tcpClient.remotePort();
+      onClientConnect(tcpClient);
+    }
+  }
+
+  // Look for people connecting over the stream server
+  // If one connected there, immidiately start streaming data
+  if (!streamClient.connected()) {
+    streamClient = streamServer.available();
+    if (streamClient.connected()) {
+      // Set everything to default settings
+      streamConfig.stream = TCP_RAW;
+      streamConfig.prefix = false;
+      streamConfig.samplingRate = DEFAULT_SR;
+      streamConfig.measures = STATE_VI;
+      streamConfig.ip = streamClient.remoteIP();
+      streamConfig.port = streamClient.remoteIP();
+      startSampling();
+    }
+  }
+}
+
+void onClientConnect(WiFiClient &client) {
+  logger.log("Client with IP %s connected on port %u", client.remoteIP().toString().c_str(), client.remotePort());
+  streamLog._stream = (Stream*)&client;
+  logger.addLogger(&streamLog);
+}
+
+void onClientDisconnect(WiFiClient &client) {
+  logger.log("Client discconnected", client.remoteIP().toString().c_str());
+  logger.removeLogger(&streamLog);
+  streamLog._stream = NULL;
+}
+
+void onSampling() {
+  // ______________ Send data to sink ________________
+  writeChunks(false);
+
+  // For error check during sampling
+  if (sqwCounter) {
+    portENTER_CRITICAL(&sqwMux);
+    sqwCounter--;
+    portEXIT_CRITICAL(&sqwMux);
+    if (!firstSqwv and testSamples != 0) {
+      response = "******** MISSED ";
+      response += streamConfig.samplingRate - testSamples;
+      response += " SAMPLES ********";
+      logger.log(ERROR, response.c_str());
+    }
+    // If it is still > 0, our loop is too slow, 
+    // reasons may be e.g. slow tcp write performance
+    if (sqwCounter) {
+      logger.log(WARNING, "Loop %us behind", sqwCounter);
+      // Reset to 0
+      portENTER_CRITICAL(&sqwMux);
+      sqwCounter = 0;
+      portEXIT_CRITICAL(&sqwMux);
+    }
+    // Ignore first sqwv showing missing samples since
+    // sqwv did not start with sampling
+    // NOTE: is this valid?
+    // TODO: can we reset the sqwv somehow?
+    if (firstSqwv) firstSqwv = false;
+    testMillis = testMillis2;
+  }
+
+  // Output sampling frequency regularly
+  if (freq != 0) {
+    long fr = freq;
+    freq = 0;
+    float frequency = (float)streamConfig.samplingRate/(float)((fr)/1000000.0);
+    logger.log("%.2fHz", frequency);
+  }
+
+  // ______________ Handle Disconnect ________________
+
+  // NOTE: Cannot detect disconnect for USB
+  if (streamConfig.stream == USB) {
+  } else if (streamConfig.stream == TCP) {
+    if (!tcpClient.connected()) {
+      logger.log(ERROR, "TCP disconnected while streaming");
+      stopSampling();
+    }
+  // Disconnect of UDP means disconnecting from tcp port
+  } else if (streamConfig.stream == UDP) {
+    if (!tcpClient.connected()) {
+      logger.log(ERROR, "TCP/UDP disconnected while streaming");
+      stopSampling();
+    }
+  // Disconnect of raw stream means stop
+  } else if (streamConfig.stream == TCP_RAW) {
+    // Check for intended connection loss
+    if (!streamClient.connected()) {
+      logger.log(INFO, "TCP Stream disconnected");
+      stopSampling();
+    }
+  }
+}
+
+// Depending on data sink, send data
+void writeChunks(bool tail) {
+  while(ringBuffer.available() > streamConfig.chunkSize) {
+    if (streamConfig.stream == UDP) {
+      udpClient.beginPacket(streamConfig.ip, streamConfig.port);
+      writeData(udpClient, streamConfig.chunkSize);
+      udpClient.endPacket();
+    } else if (streamConfig.stream == TCP) {
+      writeData(tcpClient, streamConfig.chunkSize);
+    } else if (streamConfig.stream == TCP_RAW) {
+      writeData(streamClient, streamConfig.chunkSize);
+    } else if (streamConfig.stream == USB) {
+      writeData(Serial, streamConfig.chunkSize);
+    }
+  }
+  if (tail) {
+    if (streamConfig.stream == UDP) {
+      udpClient.beginPacket(streamConfig.ip, streamConfig.port);
+      writeData(udpClient, ringBuffer.available());
+      udpClient.endPacket();
+    } else if (streamConfig.stream == TCP) {
+      writeData(tcpClient, ringBuffer.available());
+    } else if (streamConfig.stream == TCP_RAW) {
+      writeData(streamClient, ringBuffer.available());
+    } else if (streamConfig.stream == USB) {
+      writeData(Serial, ringBuffer.available());
+    }
+  }
+}
+
+// Data prefix 
+const char data_id[5] = {'D','a','t','a',':'};
+void writeData(Stream &getter, uint16_t size) {
+  if (size <= 0) return;
+  uint32_t start = 0;
+  if (streamConfig.prefix) {
+    memcpy(&sendbuffer[start], (void*)&data_id[0], sizeof(data_id));
+    start += sizeof(data_id);
+    memcpy(&sendbuffer[start], (void*)&size, sizeof(uint16_t));
+    start += sizeof(uint16_t);
+    memcpy(&sendbuffer[start], (void*)&packetNumber, sizeof(uint32_t));
+    start += sizeof(uint32_t);
+    packetNumber += 1;
+  }
+
+  ringBuffer.read(&sendbuffer[start], size);
+  // Everything is sent at once (hopefully)
+  uint32_t sent = getter.write((uint8_t*)&sendbuffer[0], size+start);
+  if (sent > start) sentSamples += (sent-start)/streamConfig.measurementBytes;
+}
+
 
 /****************************************************
  * ISR for sampling
@@ -253,7 +632,7 @@ void IRAM_ATTR sample_ISR(){
    portEXIT_CRITICAL_ISR(&timerMux);
 }
 
-// Checks if motion was detected, sets LED HIGH and starts a timer
+// triggered each second to active a new generation of <samplingrate> samples 
 void IRAM_ATTR sqwvTriggered() {
   // Disable timer if not already done in ISR
   timerAlarmDisable(timer);
@@ -262,379 +641,53 @@ void IRAM_ATTR sqwvTriggered() {
   portENTER_CRITICAL_ISR(&timerMux);
   counter = 0;
   portEXIT_CRITICAL_ISR(&timerMux);
-  //
+  
   // timerAlarmWrite(timer, TIMER_CYCLES_FAST, true);
-  // If we set the timer to 0, the last sample might be missed,
-  // if the sqwv is triggered before the last sample is sampled
-  // If we set it to half, we have the largest margin
+  // We take one sample and enable the timing interrupt afterwards
+  // this should allow the ISR e.g. at 4kHz to take 3999 samples during the next second
   timerWrite(timer, 0);
   sample_ISR();
   // Enable timer
   timerAlarmEnable(timer);
-  // indicate to main
-  sqwFlag = true;
+  // indicate to main that a second has passed and store time 
+  portENTER_CRITICAL_ISR(&sqwMux);
+  sqwCounter++;
+  portEXIT_CRITICAL(&sqwMux);
   testMillis2 = millis();
 }
 
-/************************ SETUP *************************/
-void setup() {
-  // We do not need bluetooth, so disable it
-  esp_bt_controller_disable();
-
-   // Setup serial communication
-  Serial.begin(SERIAL_SPEED);
-
-  relay.set(true);
-
-  config.load();
-
-  Serial.print("Info:");
-  Serial.print(config.name);
-  Serial.print(" @ firmware: ");
-  Serial.print(__DATE__);
-  Serial.print("/");
-  Serial.println(__TIME__);
-
-  if (ringBuffer.init()) {
-    Serial.printf("Info:Allocated %u Bytes of RAM\n", PS_BUF_SIZE);
-  } else {
-    Serial.println("Info:ps_malloc failed");
-  }
-
-
-  // config.makeDefault();
-  // config.store();
-
-
-  timer_init();
-
-  coreFreq = getCpuFrequencyMhz();
-  #ifdef DEBUG
-  Serial.print("Info:Core @ ");
-  Serial.print(coreFreq);
-  Serial.println("MHz");
-  #endif
-  // Setup STPM 32
-  stpm34.init();
-
-  rtc.init();
-
-#ifdef DEBUG
-  Serial.println("Info:Connecting WLAN ");
-#endif
-
-  Network::init(&config, onWifiConnect, onWifiDisconnect);
-
-  setupOTA();
-
-  /*
-  bool relayState = false;
-  while(true) {
-    // Setup STPM 32
-    stpm34.init();
-    float voltage = stpm34.readVoltage(1);
-    Serial.println(voltage);
-    delay(1000);
-    yield();
-    //if (relayState) Serial.println("Relay On");
-    //else Serial.println("Relay Off");
-    relay.set(relayState);
-    //digitalWrite(RELAY_PIN_S, relayState);
-    //digitalWrite(RELAY_PIN_R, !relayState);
-    relayState = ! relayState;
-  }*/
-
-  response.reserve(2*COMMAND_MAX_SIZE);
-
-
-  setInfoString(&command[0]);
-  Serial.println(command);
-
-  Serial.println(F("Info:Setup done"));
-
-  lifenessUpdate = millis();
-  mdnsUpdate = millis();
-  wifiUpdate = millis();
-}
-
-// the loop routine runs over and over again forever:
-void loop() {
-
-  // Stuff done on idle
-  if (state == STATE_IDLE) {
-    onIdle();
-  // Stuff on sampling
-  } else if (state == STATE_SAMPLE) {
-    onSampling();
-  }
-
-  // If we only have 200 ms before sampling should start, wait actively
-  if (next_state != STATE_IDLE) {
-    if (streamConfig.countdown != 0 and (streamConfig.countdown - millis()) < 200) {
-      // Disable any wifi sleep mode
-      esp_wifi_set_ps(WIFI_PS_NONE);
-      state = next_state;
-      #ifdef DEBUG
-      updateTime(false);
-      char * cur = printCurrentTime();
-      Serial.print(F("Info:StartSampling @ "));
-      Serial.println(cur);
-      #endif
-      // Calculate time to wait
-      int32_t mydelta = streamConfig.countdown - millis();
-      // Waiting here is not nice, but we wait for zero crossing
-      if (mydelta > 0) delay(mydelta-1);
-      startSampling(true);
-      // Reset sampling countdown
-      streamConfig.countdown = 0;
-    }
-  }
-
-  // Handle serial requests
-  if (Serial.available()) {
-    handleEvent(Serial);
-  }
-  // Handle tcp requests
-  if (tcpClient.available() > 0) {
-    handleEvent(tcpClient);
-  }
-
-  // Watchdog
-  yield();
-}
-
-void onWifiConnect() {
-  #ifdef DEBUG
-  Serial.println("Info: Main: Wifi Connected");
-  Serial.print("Info: IP: ");
-  Serial.println(WiFi.localIP());
-  #endif
-
-  // Reinit mdns
-  initMDNS();
-  // Start the TCP server
-  server.begin();
-  streamServer.begin();
-
-  udpNtp.begin(localNTPPort);
-
-  getTimeNTP();
-  // Reset lifeness and MDNS update
-  lifenessUpdate = millis();
-  mdnsUpdate = millis();
-}
-
-void onWifiDisconnect() {
-  #ifdef DEBUG
-  Serial.println("Info: Main: Wifi Disconnected");
-  #endif
-  if (state != STATE_IDLE) {
-    #ifdef DEBUG
-    Serial.println("Info: Stop sampling (Wifi disconnect)");
-    #endif
-    stopSampling();
-  }
-}
-
-void onIdle() {
-  // Arduino OTA
-  ArduinoOTA.handle();
-
-  // Re-advertise MDNS service service
-  if ((long)(millis() - mdnsUpdate) >= 0) {
-    MDNS.addService("elec", "tcp", STANDARD_TCP_STREAM_PORT);
-    mdnsUpdate += 100000;
-  }
-
-  // Update lifeness only on idle every second
-  if ((long)(millis() - lifenessUpdate) >= 0) {
-    if (rtc.connected) rtc.update();
-    lifenessUpdate += 1000;
-    #ifdef DEBUG
-    char * cur = printCurrentTime();
-    Serial.print(F("Info:"));
-    Serial.println(cur);
-    #endif
-  }
-
-  // Handle tcp client connections
-  if (!tcpClient.connected()) {
-    // Look for people connecting over the server
-    tcpClient = server.available();
-    // Set new udp ip
-    streamConfig.ip = tcpClient.remoteIP();
-    streamConfig.port = tcpClient.remotePort();
-  }
-
-  // Look for people connecting over the stream server
-  // If one connected there, immidiately start streaming data
-  if (!streamClient.connected()) {
-    streamClient = streamServer.available();
-    if (streamClient.connected()) {
-      // Set everything to default settings
-      streamConfig.stream = TCP_RAW;
-      streamConfig.prefix = false;
-      streamConfig.samplingRate = DEFAULT_SR;
-      streamConfig.measures = STATE_VI;
-      streamConfig.ip = streamClient.remoteIP();
-      streamConfig.port = streamClient.remoteIP();
-      startSampling();
-    }
-  }
-}
-
-void onSampling() {
-
-  if (sqwFlag) {
-    sqwFlag = false;
-    if (!firstSqwv and testSamples != 0) {
-      response = "Info:******** MISSED ";
-      response += streamConfig.samplingRate - testSamples;
-      response += " SAMPLES ********";
-      Serial.println(response);
-      if (tcpClient.connected() and streamConfig.prefix and streamConfig.stream != UDP) {
-        tcpClient.println(response);
-      }
-    }
-    // Ignore first sqwv showing missing samples since
-    // sqwv did not start with sampling
-    // NOTE: is this valid?
-    // TODO: can we reset the sqwv somehow?
-    if (firstSqwv) firstSqwv = false;
-    testMillis = testMillis2;
-  }
-
-  // Output sampling frequency regularly
-  if (freq != 0) {
-    long fr = freq;
-    freq = 0;
-    float frequency = (float)streamConfig.samplingRate/(float)((fr)/1000000.0);
-    response = "Info:";
-    response += frequency;
-    response += "Hz";
-    char * cur = printCurrentTime();
-    response += "\r\nInfo:";
-    response += cur;
-    #ifdef DEBUG
-    Serial.println(response);
-    #endif
-    #ifdef SENT_LIFENESS_TO_CLIENTS
-    if (streamConfig.prefix and streamConfig.stream != UDP and tcpClient.connected()) {
-      tcpClient.println(response);
-    }
-    #endif
-  }
-
-  // Send data to sink
-  writeChunks(false);
-
-  // ______________ Handle Disconnect ________________
-
-  // NOTE: Cannot detect disconnect for USB
-  if (streamConfig.stream == USB) {
-  } else if (streamConfig.stream == TCP) {
-    if (!tcpClient.connected()) {
-      #ifdef DEBUG
-      Serial.println(F("Info:TCP disconencted"));
-      #endif
-      stopSampling();
-    }
-  // Disconnect of UDP means disconnecting from tcp port
-  } else if (streamConfig.stream == UDP) {
-    if (!tcpClient.connected()) {
-      #ifdef DEBUG
-      Serial.println(F("Info:TCP/UDP disconnected"));
-      #endif
-      stopSampling();
-    }
-  // Disconnect of raw stream means stop
-  } else if (streamConfig.stream == TCP_RAW) {
-    // Check for intended connection loss
-    if (!streamClient.connected()) {
-      #ifdef DEBUG
-      Serial.println(F("Info:TCP Stream disconnected"));
-      #endif
-      stopSampling();
-    }
-  }
-}
-
-// Depending on data sink, send data
-void writeChunks(bool tail) {
-  while(ringBuffer.available() > streamConfig.chunkSize) {
-    if (streamConfig.stream == UDP) {
-      udpClient.beginPacket(streamConfig.ip, streamConfig.port);
-      writeData(udpClient, streamConfig.chunkSize);
-      udpClient.endPacket();
-    } else if (streamConfig.stream == TCP) {
-      writeData(tcpClient, streamConfig.chunkSize);
-    } else if (streamConfig.stream == TCP_RAW) {
-      writeData(streamClient, streamConfig.chunkSize);
-    } else if (streamConfig.stream == USB) {
-      writeData(Serial, streamConfig.chunkSize);
-    }
-  }
-  if (tail) {
-    if (streamConfig.stream == UDP) {
-      udpClient.beginPacket(streamConfig.ip, streamConfig.port);
-      writeData(udpClient, ringBuffer.available());
-      udpClient.endPacket();
-    } else if (streamConfig.stream == TCP) {
-      writeData(tcpClient, ringBuffer.available());
-    } else if (streamConfig.stream == TCP_RAW) {
-      writeData(streamClient, ringBuffer.available());
-    } else if (streamConfig.stream == USB) {
-      writeData(Serial, ringBuffer.available());
-    }
-  }
-}
-
-char data_id[5] = {'D','a','t','a',':'};
-void writeData(Stream &getter, uint16_t size) {
-  if (size <= 0) return;
-  uint32_t start = 0;
-  long ttime = millis();
-  if (streamConfig.prefix) {
-    memcpy(&sendbuffer[start], (void*)&data_id[0], sizeof(data_id));
-    start += sizeof(data_id);
-    memcpy(&sendbuffer[start], (void*)&size, sizeof(uint16_t));
-    start += sizeof(uint16_t);
-    memcpy(&sendbuffer[start], (void*)&packetNumber, sizeof(uint32_t));
-    start += sizeof(uint32_t);
-    packetNumber += 1;
-  }
-
-  ringBuffer.read(&sendbuffer[start], size);
-  // Everything is sent at once (hopefully)
-  uint32_t sent = getter.write((uint8_t*)&sendbuffer[0], size+start);
-  if (sent > start) sentSamples += (sent-start)/streamConfig.measurementBytes;
-}
-
-
-
+// To display only full percent updates
+unsigned int oldPercent = 0;
 void setupOTA() {
-  ArduinoOTA.setPassword("energy");
+  // Same name as mdns
+  ArduinoOTA.setHostname(config.name);
+  ArduinoOTA.setPassword("energy"); 
   // Password can be set with it's md5 value as well
   // MD5(admin) = 21232f297a57a5a743894a0e4a801fc3
   // ArduinoOTA.setPasswordHash("21232f297a57a5a743894a0e4a801fc3");
 
   ArduinoOTA.onStart([]() {
-    Serial.println("Start updating");
+    logger.log("Start updating");
     // free(buffer);
   });
   ArduinoOTA.onEnd([]() {
-    Serial.println("\nEnd");
+    logger.log("End");
   });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+    unsigned int percent = (progress / (total / 100));
+    if (percent != oldPercent) {
+      logger.log("Progress: %u%%\r", (progress / (total / 100)));
+      oldPercent = percent;
+    }
   });
   ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("Error[%u]: ", error);
-    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
-    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
-    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-    else if (error == OTA_END_ERROR) Serial.println("End Failed");
+    logger.append("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) logger.append("Auth Failed");
+    else if (error == OTA_BEGIN_ERROR) logger.append("Begin Failed");
+    else if (error == OTA_CONNECT_ERROR) logger.append("Connect Failed");
+    else if (error == OTA_RECEIVE_ERROR) logger.append("Receive Failed");
+    else if (error == OTA_END_ERROR) logger.append("End Failed");
+    logger.flush(ERROR);
     // No matter what happended, simply restart
     ESP.restart();
   });
@@ -655,22 +708,15 @@ void handleEvent(Stream &getter) {
     getter.println(F("Info:Setup done"));
     return;
   }
-  #ifdef DEBUG
-  Serial.print(F("Info:")); Serial.println(command);
+  #ifdef DEBUG_DEEP
+  logger.log(INFO, command);
   #endif
 
   // Deserialize the JSON document
   DeserializationError error = deserializeJson(docRcv, command);
   // Test if parsing succeeds.
   if (error) {
-    getter.print(F("Info:deserializeJson() failed: "));
-    getter.println(error.c_str());
-    #ifdef DEBUG
-    if (&getter != &Serial) {
-      Serial.print(F("Info:deserializeJson() failed: "));
-      Serial.println(error.c_str());
-    }
-    #endif
+    logger.log(ERROR, "deserializeJson() failed: %s", error.c_str());
     return;
   }
   //docSend.clear();
@@ -684,10 +730,8 @@ void handleEvent(Stream &getter) {
     serializeJson(docSend, response);
     response = "Info:" + response;
     getter.println(response);
-
-    #ifdef DEBUG
-    if (&getter != &Serial) Serial.println(response);
-    #endif
+    // This will be too long for the logger
+    // logger.log(response.c_str());
   }
   response = "";
 }
@@ -812,12 +856,13 @@ void handleJSON() {
 
     if (ts != 0) {
       response += F("Should sample at: ");
-      response += printTime(ts,0);
-      updateTime(true);
-      uint32_t delta = ts - currentSeconds;
+      response += myTime.timeStr(ts, 0);
+      // Update ntp time actively wait for finish
+      myTime.updateNTPTime(true);
+      uint32_t delta = ts - myTime.utc_seconds();
       uint32_t nowMs = millis();
       delta *= 1000;
-      delta -= currentMilliseconds;
+      delta -= myTime.milliseconds();
       if (delta > 20000 or delta < 500) {
         response += F("//nCannot start sampling in: "); response += delta; response += F("ms");
         streamConfig.countdown = 0;
@@ -857,7 +902,6 @@ void handleJSON() {
   // e.g. {"cmd":{"name":"stop"}}
   else if (strcmp(cmd, CMD_STOP) == 0) {
     // State is reset in stopSampling
-    int prev_state = state;
     stopSampling();
     // Write remaining chunks with tail
     writeChunks(true);
@@ -865,6 +909,7 @@ void handleJSON() {
     docSend["sample_duration"] = samplingDuration;
     docSend["samples"] = totalSamples;
     docSend["sent_samples"] = sentSamples;
+    docSend["ip"] = WiFi.localIP().toString();
     docSend["avg_rate"] = totalSamples/(samplingDuration/1000.0);
     docSend["cmd"] = CMD_STOP;
   }
@@ -885,19 +930,24 @@ void handleJSON() {
   /*********************** INFO COMMAND ****************************/
   // e.g. {"cmd":{"name":"info"}}
   else if (strcmp(cmd, CMD_INFO) == 0) {
+    docSend["cmd"] = "info";
     docSend["msg"] = F("WIFI powermeter");
     docSend["version"] = VERSION;
+    String compiled = __DATE__;
+    compiled += " ";
+    compiled += __TIME__;
+    docSend["compiled"] = compiled;
+    docSend["sys_time"] = myTime.timeStr();
     docSend["name"] = config.name;
+    docSend["ip"] = WiFi.localIP().toString();
     docSend["sampling_rate"] = streamConfig.samplingRate;
-    /*
     docSend["buffer_size"] = ringBuffer.getSize();
     docSend["psram"] = ringBuffer.inPSRAM();
     docSend["rtc"] = rtc.connected;
-    docSend["system_time"] = printCurrentTime();*/
     String ssids = "[";
     for (int i = 0; i < config.numAPs; i++) {
       ssids += config.wifiSSIDs[i];
-      ssids += ", ";
+      if (i < config.numAPs-1) ssids += ", ";
     }
     ssids += "]";
     docSend["ssids"] = ssids;
@@ -1016,16 +1066,14 @@ void handleJSON() {
   /*********************** NTP COMMAND ****************************/
   // e.g. {"cmd":{"name":"ntp"}}
   else if (strcmp(cmd, CMD_NTP) == 0) {
-    if (getTimeNTP()) {
+    if (myTime.updateNTPTime(true)) {
       docSend["msg"] = "Time synced";
       docSend["error"] = false;
     } else {
       docSend["msg"] = "Error syncing time";
       docSend["error"] = true;
     }
-    char * timeStr = printTime(ntpEpochSeconds, ntpMilliseconds);
-    docSend["ntp_time"] = timeStr;
-    timeStr = printCurrentTime();
+    char * timeStr = myTime.timeStr();
     docSend["current_time"] = timeStr;
   }
 }
@@ -1037,8 +1085,6 @@ void handleJSON() {
  * will send EOF to the client
  ****************************************************/
 void stopSampling() {
-  // Stop the 2nd loop (RAM -> PSRAM) if it is running
-  if (TaskLoop2 != NULL) vTaskDelete(TaskLoop2);
   if (rtc.connected) rtc.disableInterrupt();
   state = STATE_IDLE;
   next_state = STATE_IDLE;
@@ -1105,6 +1151,7 @@ void startSampling(bool waitVoltage) {
   packetNumber = 0;
   // This will reset the sqwv pin
   firstSqwv = true;
+  sqwCounter = 0;
   if (rtc.connected) rtc.enableInterrupt(1, sqwvTriggered);
   // If we should wait for voltage to make positive zerocrossing
   if (waitVoltage) {
@@ -1150,155 +1197,15 @@ void timer_init() {
 void initMDNS() {
   char * name = config.name;
   if (strlen(name) == 0) {
-    Serial.print(F("Info:Sth wrong with mdns"));
+    logger.log(ERROR, "Sth wrong with mdns");
     strcpy(name,"powerMeterX");
   }
   // Setting up MDNs with the given Name
-  Serial.print(F("Info:MDNS Name: ")); Serial.println(name);
+  logger.log("MDNS Name: %s", name);
   if (!MDNS.begin(String(name).c_str())) {             // Start the mDNS responder for esp8266.local
-    Serial.println(F("Info:Error setting up MDNS responder!"));
+    logger.log(ERROR, "Setting up MDNS responder!");
   }
-  MDNS.addService("elec", "tcp", STANDARD_TCP_STREAM_PORT);
-}
-
-TaskHandle_t ntpTaskHandle = NULL;
-unsigned long lastTry = millis();
-void updateTimeInBG( void * pvParameters ) {
-  int32_t delta = millis()-ntpValidMillis;
-  getTimeNTP();
-  delta = millis()-ntpValidMillis;
-
-  if (ntpEpochSeconds != 0) {
-    currentMilliseconds = ntpMilliseconds + delta%1000;
-    currentSeconds = ntpEpochSeconds + delta/1000 + currentMilliseconds/1000;
-    currentMilliseconds = currentMilliseconds%1000;
-    if (rtc.connected and rtc.lost) {
-      unsigned long slocal = currentSeconds + LOCATION_OFFSET;
-      DateTime ntpNow(year(slocal), month(slocal), day(slocal), hour(slocal), minute(slocal), second(slocal));
-      rtc.setTime(ntpNow);
-    }
-  }
-  ntpTaskHandle = NULL;
-  vTaskDelete( NULL );
-}
-
-void updateTime(bool ntp) {
-  int32_t delta = millis()-ntpValidMillis;
-  if (ntp) {
-    getTimeNTP();
-    lastTry = millis();
-    delta = millis()-ntpValidMillis;
-  }
-  if (((delta > 60000) && (millis()-lastTry > 10000))) {
-    lastTry = millis();
-    if (ntpTaskHandle == NULL) {
-      // let it check on second core (not in loop)
-      xTaskCreatePinnedToCore(
-                        updateTimeInBG,   /* Function to implement the task */
-                        "timeUpdateTask", /* Name of the task */
-                        10000,      /* Stack size in words */
-                        NULL,       /* Task input parameter */
-                        0,          /* Priority of the task */
-                        &ntpTaskHandle,       /* Task handle. */
-                        0);  /* Core where the task should run */
-    } else {
-      Serial.println("Info: Task Handle not none");
-    }
-  }
-  if (ntpEpochSeconds == 0) return;
-  currentMilliseconds = ntpMilliseconds + delta%1000;
-  currentSeconds = ntpEpochSeconds + delta/1000 + currentMilliseconds/1000;
-  currentMilliseconds = currentMilliseconds%1000;
-}
-
-char timeString[32];
-char * printCurrentTime() {
-  updateTime(false);
-  return printTime(currentSeconds, currentMilliseconds);
-}
-
-char * printDuration(unsigned long ms) {
-  sprintf(timeString, "%02d:%02d:%02d.%03d", (int)hour(ms/1000), (int)minute(ms/1000), (int)second(ms/1000), (int)ms%1000);
-  return timeString;
-}
-
-char * printTime(unsigned long s, unsigned long ms) {
-  unsigned long slocal = s + LOCATION_OFFSET;
-  // Serial.print("Date: ");
-  // Serial.print()%4d-%02d-%02d %02d:%02d:%02d\n", year(t_unix_date1), month(t_unix_date1), day(t_unix_date1), hour(t_unix_date1), minute(t_unix_date1), second(t_unix_date1));
-  sprintf(timeString, "%4d-%02d-%02d %02d:%02d:%02d.%03d", (int)year(slocal), (int)month(slocal), (int)day(slocal), (int)hour(slocal), (int)minute(slocal), (int)second(slocal), (int)ms);
-  return timeString;
-}
-/****************************************************
- * Try to get accurate time over NTP
- ****************************************************/
-bool getTimeNTP() {
-  Serial.println(F("Info:Sending NTP packet..."));
-  WiFi.hostByName(ntpServerName, timeServerIP);
-  Serial.print(F("Info:To "));
-  Serial.print(ntpServerName);
-  Serial.print(F(" with IP: "));
-  Serial.println(timeServerIP);
-  // Reset all bytes in the buffer to 0
-  memset(ntpBuffer, 0, NTP_PACKET_SIZE);
-  // Initialize values needed to form NTP request
-  ntpBuffer[0] = 0b11100011; // LI, Version, Mode
-  ntpBuffer[1] = 0; // Stratum, or type of clock
-  ntpBuffer[2] = 6; // Polling Interval
-  ntpBuffer[3] = 0xEC; // Peer Clock Precision
-  // 8 bytes of zero for Root Delay & Root Dispersion
-  ntpBuffer[12]  = 49;
-  ntpBuffer[13]  = 0x4E;
-  ntpBuffer[14]  = 49;
-  ntpBuffer[15]  = 52;
-  // all NTP fields have been given values, now
-  // you can send a packet requesting a timestamp:
-
-  long start = millis();
-  udpNtp.beginPacket(timeServerIP, 123); //NTP requests are to port 123
-  udpNtp.write(ntpBuffer, NTP_PACKET_SIZE);
-  udpNtp.endPacket();// should flush
-  // Wait for packet to arrive with timeout of 2 seconds
-  int cb = udpNtp.parsePacket();
-  while(!cb) {
-    if (start + 2000 < millis()) break;
-    cb = udpNtp.parsePacket();
-    yield();
-  }
-  if (!cb) {
-    Serial.println(F("Info:No NTP response yet"));
-    return false;
-  }
-
-  ntpValidMillis = millis();
-  uint16_t tripDelayMs = (ntpValidMillis-start)/2;
-  ntpValidMillis -= tripDelayMs;
-  //Serial.print("Info:Received NTP packet, length=");
-  //Serial.println(cb);
-  // We've received a packet, read the data from it
-  udpNtp.read(ntpBuffer, NTP_PACKET_SIZE);
-  // read the packet into the buf
-  unsigned long highWord = word(ntpBuffer[40], ntpBuffer[41]);
-  unsigned long lowWord = word(ntpBuffer[42], ntpBuffer[43]);
-  // combine the four bytes (two words) into a long integer
-  // this is NTP time (seconds since Jan 1 1900):
-  unsigned long secsSince1900 = highWord << 16 | lowWord;
-  uint32_t frac  = (uint32_t) ntpBuffer[44] << 24
-                 | (uint32_t) ntpBuffer[45] << 16
-                 | (uint32_t) ntpBuffer[46] <<  8
-                 | (uint32_t) ntpBuffer[47] <<  0;
-  uint16_t mssec = ((uint64_t) frac *1000) >> 32;
-  // Unix time starts on Jan 1 1970. In seconds, that's 2208988800:
-  // subtract seventy years:
-  unsigned long epoch = secsSince1900 - 2208988800UL;
-  // Add the time we waited
-  ntpEpochSeconds = epoch;
-  ntpMilliseconds = mssec;
-  #ifdef DEBUG
-  Serial.print(F("Info:NTP Time:"));
-  Serial.println(printTime(ntpEpochSeconds, ntpMilliseconds));
-  #endif
-  return true;
+  MDNS.addService("_elec", "_tcp", STANDARD_TCP_STREAM_PORT);
 }
 
 // Make sure enough memory is allocated for str
@@ -1306,7 +1213,7 @@ void setInfoString(char * str) {
   int idx = 0;
   idx += sprintf(&str[idx], "\n");
   // Name and firmware
-  idx += sprintf(&str[idx], "Info: %s @ firmware: %s/%s", config.name, __DATE__, __TIME__);
+  idx += sprintf(&str[idx], "%s @ firmware: %s/%s", config.name, __DATE__, __TIME__);
   idx += sprintf(&str[idx], "\nUsing %d bytes ", ringBuffer.getSize());
   // PSRAM or not
   if (ringBuffer.inPSRAM()) {

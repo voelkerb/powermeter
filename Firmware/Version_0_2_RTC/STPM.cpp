@@ -13,8 +13,15 @@
 #include "STPM.h"
 #include <SPI.h>
 
+
+
+// Info:|31|30|29|28|27|26|25|24|23|22|21|20|19|18|17|16|15|14|13|12|11|10| 9| 8| 7| 6| 5| 4| 3| 2| 1| 0| 
+// Info:| 0| 0| 0| 0| 1| 1| 1| 1| 0| 0| 1| 0| 0| 1| 1| 1| 0| 0| 0| 0| 0| 0| 1| 1| 0| 0| 1| 0| 0| 1| 1| 1| 
+
+
+
 //SPISettings spiSettings(12000000, MSBFIRST, SPI_MODE3);
-SPISettings spiSettings(4000000, MSBFIRST, SPI_MODE3);
+SPISettings spiSettings(8000000, MSBFIRST, SPI_MODE3);
 
 DSP_CR100bits_t DSP_CR100bits;
 DSP_CR101bits_t DSP_CR101bits;
@@ -46,7 +53,7 @@ STPM::STPM(int resetPin, int csPin) {
   _crcEnabled = true;
 }
 
-void STPM::init() {
+bool STPM::init() {
   pinMode(CS_PIN, OUTPUT);
   if (SYN_PIN != -1) pinMode(SYN_PIN, OUTPUT);
   pinMode(RESET_PIN, OUTPUT);
@@ -72,13 +79,14 @@ void STPM::init() {
   digitalWrite(CS_PIN, HIGH);
   SPI.begin();
   //SPI.beginTransaction(spiSettings);
-  Init_STPM34();
+  bool success = Init_STPM34();
   #ifdef DEBUG_DEEP
 	Serial.println(F("End Init"));
   #endif
+  return success;
 }
 
-void STPM::Init_STPM34() {
+bool STPM::Init_STPM34() {
   #ifdef DEBUG_DEEP
 	Serial.println(F("Start Init_STPM34"));
   #endif
@@ -151,14 +159,29 @@ void STPM::Init_STPM34() {
   setCurrentGain(2, sixteenX);
 
 
+  // Read gain, use gain to test if stpm is up and running
+  readFrame(0x18, readBuffer);
+  bool success = checkGain(1, readBuffer);
+  
   #ifdef DEBUG
   Serial.println(F("Info:GAIN (Bit 26/27):"));
-  // Read Gain
-  readFrame(0x18, readBuffer);
   printRegister(readBuffer, "GainC1:");
-  readFrame(0x1A, readBuffer);
-  printRegister(readBuffer, "GainC2:");
+  Serial.println(F("Info:GAIN (Bit 26/27):"));
+  Serial.print(F("Info:SetGain1: "));
+  Serial.println(success ? "Success" : "Fail");
+  #endif
 
+  // Read gain, use gain to test if stpm is up and running
+  readFrame(0x1A, readBuffer);
+  success = success && checkGain(2, readBuffer);
+
+  #ifdef DEBUG
+  printRegister(readBuffer, "GainC2:");
+  Serial.print(F("Info:SetGain2: "));
+  Serial.println(success ? "Success" : "Fail");
+  #endif
+
+  #ifdef DEBUG
   Serial.println(F("Info:LPW: (Bit 24-27)"));
   readFrame(0x0, readBuffer);
   printRegister(readBuffer, "LPW1:");
@@ -172,6 +195,7 @@ void STPM::Init_STPM34() {
   #ifdef DEBUG_DEEP
 	Serial.println(F("End Init_STPM34"));
   #endif
+  return success;
 }
 
 void STPM::CRC(bool enabled) {
@@ -265,6 +289,29 @@ void STPM::readAll(uint8_t channel, float *voltage, float *current, float* activ
   *current = calcCurrent(buffer0to32(readBuffer));
 }
 
+
+bool STPM::checkGain(uint8_t channel, uint8_t *buffer) {
+  // Set current gain: 0x00 = 2, 0x01 = 4, 0x02 = 8, 0x03 = 16
+  if (channel != 1 && channel != 2) {
+    #ifdef DEBUG
+    Serial.print(F("Info:checkCurrentGain: Channel "));
+    Serial.print(channel);
+    Serial.println(F(" out of range"));
+    #endif
+    return false;
+  }
+  if (channel == 1) {
+    if (DFE_CR101bits.LSB != buffer[2]) return false;
+    if (DFE_CR101bits.MSB != buffer[3]) return false;
+    if (DFE_CR101bits.GAIN1 != _gain1) return false;
+  } else {
+    if (DFE_CR201bits.LSB != buffer[2]) return false;
+    if (DFE_CR201bits.MSB != buffer[3]) return false;
+    if (DFE_CR201bits.GAIN1 != _gain2) return false;
+  }
+  return true;
+}
+
 void STPM::setCurrentGain(uint8_t channel, Gain gain) {
   // Set current gain: 0x00 = 2, 0x01 = 4, 0x02 = 8, 0x03 = 16
   if (channel != 1 && channel != 2) {
@@ -287,15 +334,20 @@ void STPM::setCurrentGain(uint8_t channel, Gain gain) {
     DFE_CR101bits.LSB = readBuffer[2];
     DFE_CR101bits.MSB = readBuffer[3];
     DFE_CR101bits.GAIN1 = gain;
+    _gain1 = gain;
     dataLSB = DFE_CR101bits.LSB;
     dataMSB = DFE_CR101bits.MSB;    //set current gain for Chn1
   } else {
+    // TODO: where is gain2? Wrong address here
+    // Read Gain
+    readFrame(0x1A, readBuffer);
     //set GAIN2 in DFE_CR2 register
     readAdd = 0x00;
     writeAdd = 0x1B;
     DFE_CR201bits.LSB = readBuffer[0];
     DFE_CR201bits.MSB = readBuffer[1];
     DFE_CR201bits.GAIN1 = gain;
+    _gain2 = gain;
     dataLSB = DFE_CR201bits.LSB;
     dataMSB = DFE_CR201bits.MSB;
   }
@@ -906,21 +958,17 @@ void STPM::sendFrameCRC(uint8_t readAdd, uint8_t writeAdd, uint8_t dataLSB, uint
 #ifdef DEBUG_DEEP
   printRegister(frame, "Sending:");
 #endif
-  uint8_t shit[STPM3x_FRAME_LEN] = {0x00, 0x00, 0x00, 0x00, 0x00};
   SPI.beginTransaction(spiSettings);
   digitalWrite(CS_PIN, LOW);
   //delayMicroseconds(4);
-  shit[0] = SPI.transfer(frame[0]);
-  shit[1] = SPI.transfer(frame[1]);
-  shit[2] = SPI.transfer(frame[2]);
-  shit[3] = SPI.transfer(frame[3]);
-  shit[4] = SPI.transfer(frame[4]);
+  SPI.transfer(frame[0]);
+  SPI.transfer(frame[1]);
+  SPI.transfer(frame[2]);
+  SPI.transfer(frame[3]);
+  SPI.transfer(frame[4]);
   //delayMicroseconds(4);
   digitalWrite(CS_PIN, HIGH);
   SPI.endTransaction();
-  #ifdef DEBUG_DEEP
-  printRegister(shit, "Received:");
-  #endif
 }
 
 void STPM::printFrame(uint8_t *frame, uint8_t length) {

@@ -13,6 +13,7 @@
 
 #include <Wire.h> // must be included here so that Arduino library object file references work
 #include <RTClib.h>
+#include "logger.h"
 
 #if (ARDUINO >= 100)
 #include "Arduino.h"
@@ -22,9 +23,8 @@
 
 class Rtc {
   public:
-    Rtc();
     Rtc(int intPin);
-    void init();
+    bool init();
     DateTime update();
     bool enableInterrupt(int frequency, void (*cb)(void));
     void disableInterrupt();
@@ -40,6 +40,7 @@ class Rtc {
     int INT_PIN;
     char _timeStr[50];
 
+    MultiLogger &logger;
     void (*_intCB)(void);
 };
 

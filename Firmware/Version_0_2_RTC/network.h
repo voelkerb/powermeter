@@ -16,23 +16,20 @@
 #include <WiFiAP.h>
 #include <Ticker.h>
 #include "config.h"
+#include "logger.h"
 
 #if (ARDUINO >= 100)
 #include "Arduino.h"
 #else
 #include "WProgram.h"
 #endif
-#define DEBUG
 // #define DEBUG_DEEP
-#define CHECK_PERIODE 10
+#define CHECK_PERIODE 30
 
 namespace Network {
-    static bool connected;
-    static Configuration * _config;
-    static void (*_onConnect)(void);
-    static void (*_onDisconnect)(void);
-    static bool _apMode;
-    static Ticker checker;
+    extern MultiLogger& logger;
+    extern bool connected;
+    extern bool apMode;
 
     void init(Configuration * config);
     void init(Configuration * config, void (*onConnect)(void), void (*onDisconnect)(void));
@@ -42,9 +39,6 @@ namespace Network {
     void wifiEvent(WiFiEvent_t event);
     void checkNetwork();
     void scanNetwork( void * pvParameters );
-
-    static uint16_t _scanCount;
-    static void* _scanResult;
 }
 
 #endif
