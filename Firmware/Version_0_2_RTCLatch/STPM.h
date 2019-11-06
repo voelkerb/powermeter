@@ -22,7 +22,6 @@
 #include "WProgram.h"
 #endif
 
-// #define DEBUG
 // #define DEBUG_DEEP
 
 
@@ -66,7 +65,7 @@ class STPM {
     void readVoltageSagAndSwellTime(uint8_t channel, float* sag, float* swell);
     void readCurrentPhaseAndSwellTime(uint8_t channel, float* phase, float* swell);
     void readPeriods(float* ch1, float* ch2);
-    void latchReg();
+    void IRAM_ATTR latchReg();
     void autoLatch(bool enabled);
     void CRC(bool enabled);
 

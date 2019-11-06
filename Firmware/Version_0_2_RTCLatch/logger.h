@@ -26,6 +26,12 @@
 #define MAX_TEXT_LENGTH (MAX_LOG_TEXT_LENGTH+MAX_TIME_TEXT_LENGTH)
 
 static const char * const LOG_TYPE_TEXT[] = {"[A]", "[D]", "[I]", "[W]", "[E]",};
+static const char LOG_ALL_TEXT[] = "[A]";
+static const char LOG_DEBUG_TEXT[] = "[D]";
+static const char LOG_INFO_TEXT[] = "[I]";
+static const char LOG_WARNING_TEXT[] = "[W]";
+static const char LOG_ERROR_TEXT[] = "[E]";
+
 static const char NOTHING_TEXT[] = "";
 static const char BYTES[] = "Bytes";
 static const char KILO_BYTES[] = "kB";
@@ -36,6 +42,24 @@ static const char * const MY_RESET_REASON_TXT[] = {
     "RTCWDT_SYS_RESET", "INTRUSION_RESET", "TGWDT_CPU_RESET", "SW_CPU_RESET", "RTCWDT_CPU_RESET", "EXT_CPU_RESET", "RTCWDT_BROWN_OUT_RESET",
     "RTCWDT_RTC_RESET",
 };
+
+// static const char TXT_NO_MEAN[] = "NO_MEAN";
+// static const char TXT_POWERON_RESET[] = "POWERON_RESET";
+// static const char TXT_SW_RESET[] = "SW_RESET";
+// static const char TXT_OWDT_RESET[] = "OWDT_RESET";
+// static const char TXT_DEEPSLEEP_RESET[] = "DEEPSLEEP_RESET";
+// static const char TXT_SDIO_RESET[] = "SDIO_RESET";
+// static const char TXT_TG0WDT_SYS_RESET[] = "TG0WDT_SYS_RESET";
+// static const char TXT_TG1WDT_SYS_RESET[] = "TG1WDT_SYS_RESET";
+// static const char TXT_RTCWDT_SYS_RESET[] = "RTCWDT_SYS_RESET";
+// static const char TXT_INTRUSION_RESET[] = "INTRUSION_RESET";
+// static const char TXT_TGWDT_CPU_RESET[] = "TGWDT_CPU_RESET";
+// static const char TXT_SW_CPU_RESET[] = "SW_CPU_RESET";
+// static const char TXT_RTCWDT_CPU_RESET[] = "RTCWDT_CPU_RESET";
+// static const char TXT_EXT_CPU_RESET[] = "EXT_CPU_RESET";
+// static const char TXT_RTCWDT_BROWN_OUT_RESET[] = "RTCWDT_BROWN_OUT_RESET";
+// static const char TXT_RTCWDT_RTC_RESET[] = "RTCWDT_RTC_RESET";
+
 
 enum LogType{ALL, DEBUG, INFO, WARNING, ERROR};
 
@@ -145,8 +169,8 @@ class MultiLogger {
     MultiLogger(const MultiLogger &);             // Prevent copy constructor
     MultiLogger & operator=(const MultiLogger &); // prevents copy
 
-
     const char* _reset_reason(RESET_REASON reason);
+    const char* _logTypeToStr(LogType type);
     SemaphoreHandle_t w_mutex; // During write, we are not allowed to add or remove streams from the logger class
     Logger * loggers[MAX_LOG_STREAMS];
     

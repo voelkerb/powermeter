@@ -18,6 +18,16 @@ Logger::Logger(char * (*timeStrGetter)(void), const char * prefix, LogType type)
   _prefix = prefix;
   _timeStrGetter = timeStrGetter;
 }
+const char * Logger::logTypeToStr(LogType type) {
+  if (type == ALL) return &ALL_TEXT[0];
+  else if (type == INFO) return &INFO_TEXT[0];
+  else if (type == WARNING) return &WARNING_TEXT[0];
+  else if (type == ERROR) return &ERROR_TEXT[0];
+  else if (type == DEBUG) return &DEBUG_TEXT[0];
+  else return &ALL_TEXT[0];
+}
+
+
 // ********************************* STREAM LOGGER ************************************* //
 StreamLogger::StreamLogger(Stream * stream, char * (*timeStrGetter)(void), const char * prefix, LogType type):Logger(timeStrGetter, prefix, type) {
   _stream = stream;
@@ -31,26 +41,16 @@ void StreamLogger::write(char * str) {
 void StreamLogger::flush() {
   _stream->flush();
 }
-bool StreamLogger::init() {
-  return true;
-}
 
 
-//  #define DEBUG_SPIFFS_LOGGER
+#define DEBUG_SPIFFS_LOGGER
 // ********************************* SPIFFS LOGGER ************************************* //
-SPIFFSLogger::SPIFFSLogger(bool autoFlush, const char * fileName, char * (*timeStrGetter)(void), 
-                           const char * prefix, LogType type, int32_t maxFileSize):Logger(timeStrGetter, prefix, type) {
+SPIFFSLogger::SPIFFSLogger(const char * fileName, char * (*timeStrGetter)(void), const char * prefix, LogType type, int32_t maxFileSize):Logger(timeStrGetter, prefix, type) {
   strcpy(_fileName[0], fileName);
   strcpy(_fileName[1], fileName);
   int index = strlen(fileName);
   strcpy(&_fileName[1][index], "1");
   _maxFileSize = maxFileSize;
-  _truncated = false;
-  _bufferIndex = 0;
-  _autoFlush = autoFlush;
-  _mutex = xSemaphoreCreateMutex();
-  // Init buffers
-  for (int i = 0; i < BUFFERS; i++) buffer[i][0] = '\0';
 }
 
 bool SPIFFSLogger::init() {
@@ -88,8 +88,8 @@ bool SPIFFSLogger::init() {
     _file[0].print(_timeStrGetter());
     _file[0].print(": ");
   } 
-  // _file[0].println("Reboot - inited SPIFFS Logger");
-  // _file[0].flush();
+  _file[0].println("Reboot - inited SPIFFS Logger");
+  _file[0].flush();
 
   for (int i = 0; i < NUM_FILES; i++) _rowsFile[i] = -1;
   
@@ -141,9 +141,6 @@ bool SPIFFSLogger::nextRow(char * buffer) {
   }
   //Serial.print(_file[_currentFile].readStringUntil('\n'));
   strcpy(buffer, _file[_currentFile].readStringUntil('\n').c_str());
-  // remove \r
-  int length = strlen(buffer);
-  if (length > 0) buffer[length-1] = '\0';
   return true;
 }
 
@@ -215,7 +212,6 @@ bool SPIFFSLogger::clear() {
     }
     #endif
   }
-  for (int i = 0; i < BUFFERS; i++) buffer[i][0] = '\0';
   return success;
 }
 
@@ -245,34 +241,6 @@ void SPIFFSLogger::write(const char * str) {
 }
 
 void SPIFFSLogger::write(char * str) {
-  if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) { 
-    if (_autoFlush) {
-      _write(str);
-    } else {
-      Serial.println("entering buffered write");
-      // Get size of resulting buffer
-      int n1 = strlen(&buffer[_bufferIndex][0]);
-      int n2 = strlen(str);
-
-      Serial.printf("n1: %i, n2: %i\n", n1, n2);
-      // If would not fit, copy over
-      if (n1+n2 >= BUF_SIZE-1) {
-        _bufferIndex = (_bufferIndex + 1)%BUFFERS;
-        Serial.printf("_bufferIndex: %i\n", _bufferIndex);
-        // Indicate truncation
-        if (strlen(&buffer[_bufferIndex][0]) > 0) {
-          _truncated = true;
-        }
-        // Start is next buffer
-        n1 = 0;
-      }
-      memcpy(&buffer[_bufferIndex][n1], str, n2);
-    }
-    xSemaphoreGive(_mutex);
-  }
-}
-
-void SPIFFSLogger::_write(char * str) {
   #ifdef DEBUG_SPIFFS_LOGGER
   long ttime = millis();
   Serial.println("Writing file");
@@ -289,42 +257,14 @@ void SPIFFSLogger::_write(char * str) {
   }
   _file[0].print(str);
   _file[0].flush();
-  _file[0].close();
   #ifdef DEBUG_SPIFFS_LOGGER
   Serial.printf("Took: %lu ms\n", millis()-ttime);
   #endif
 }
 
 void SPIFFSLogger::flush() {
-  if (!_autoFlush) {
-    // Nothing to be done
-    if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) { 
-      if (strlen(&buffer[0][0]) > 0) {
-        Serial.println("flushing");
-        _bufferIndex = (_bufferIndex + 1)%BUFFERS;
-        if (_truncated) {
-          _write((char *)"Truncated...\n");
-        }
-        for (int i = 0; i < BUFFERS; i++) {
-          size_t n = strlen(&buffer[_bufferIndex][0]);
-          Serial.printf("_bufferIndex %i, N: %i\n", _bufferIndex, n);
-          if (n > 0) {
-            _write(&buffer[_bufferIndex][0]);
-            // Reset buffer
-            buffer[_bufferIndex][0] = '\0';
-          }
-          _bufferIndex = (_bufferIndex + 1)%BUFFERS;
-        }
-        _bufferIndex = 0;
-        _truncated = false;
-        Serial.println("flushed");
-      }
-      xSemaphoreGive(_mutex);
-    }
-  }
   _file[0].flush();
 }
-
 
 void SPIFFSLogger::_fileSizeLimitReached() {
   #ifdef DEBUG_SPIFFS_LOGGER
@@ -363,23 +303,6 @@ MultiLogger::MultiLogger() {
   _currentLog = INFO;
 }
 
-bool MultiLogger::init() {
-  bool success = true;
-  for (int i = 0; i < MAX_LOG_STREAMS; i++) {
-     if (loggers[i] != NULL) {
-       success &= loggers[i]->init();
-     }
-  }
-  log(WARNING, "Resetted, reasons CPU1: %s, CPU2: %s", _reset_reason(rtc_get_reset_reason(0)), _reset_reason(rtc_get_reset_reason(1)));
-  return success;
-}
-
-const char * MultiLogger::_reset_reason(RESET_REASON reason) {
-  if (reason <= 16) return MY_RESET_REASON_TXT[reason];
-  else return MY_RESET_REASON_TXT[0];
-}
-
-
 void MultiLogger::setTimeGetter(char * (*timeStrGetter)(void)) {
   _timeStrGetter = timeStrGetter;
 }
@@ -414,6 +337,15 @@ bool MultiLogger::removeLogger(Logger * logger) {
     xSemaphoreGive(w_mutex);
   }
   return success;
+}
+
+const char * MultiLogger::logTypeToStr(LogType type) {
+  if (type == ALL) return &ALL_TEXT[0];
+  else if (type == INFO) return &INFO_TEXT[0];
+  else if (type == WARNING) return &WARNING_TEXT[0];
+  else if (type == ERROR) return &ERROR_TEXT[0];
+  else if (type == DEBUG) return &DEBUG_TEXT[0];
+  else return &ALL_TEXT[0];
 }
 
 void MultiLogger::append(const char* _log, ...) {
@@ -471,7 +403,7 @@ void MultiLogger::log(const char* _log, ...) {
     vsprintf(&_logText[_index], _log, args);
     va_end(args);
 
-    const char * typeStr = LOG_TYPE_TEXT[_currentLog];
+    const char * typeStr = logTypeToStr(_currentLog);
     for (int i = 0; i < MAX_LOG_STREAMS; i++) {
       if (loggers[i] != NULL && (uint8_t)loggers[i]->_type <= (uint8_t)_currentLog) {
         sprintf(_aLLStr, "%s%s%s: %s\r\n", loggers[i]->_prefix, typeStr, timeStr, _logText);

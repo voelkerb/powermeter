@@ -21,7 +21,7 @@
 
 
 //SPISettings spiSettings(12000000, MSBFIRST, SPI_MODE3);
-SPISettings spiSettings(8000000, MSBFIRST, SPI_MODE3);
+SPISettings spiSettings(12000000, MSBFIRST, SPI_MODE3);
 
 DSP_CR100bits_t DSP_CR100bits;
 DSP_CR101bits_t DSP_CR101bits;
@@ -93,7 +93,7 @@ bool STPM::Init_STPM34() {
   uint8_t readAdd, writeAdd, dataLSB, dataMSB;
 
   //set Voltage Reference
-  #ifdef DEBUG
+  #ifdef DEBUG_DEEP
   Serial.println(F("Info:Set DSP Control Register 1 LSW"));
   #endif
   DSP_CR100bits.ENVREF1 = 1;       //enable internal Vref1 bit for CH0;
@@ -104,7 +104,7 @@ bool STPM::Init_STPM34() {
   dataMSB = DSP_CR100bits.MSB;
   sendFrameCRC(0x00, 0x00, dataLSB, dataMSB); //write to  CR1 register
 
-  #ifdef DEBUG
+  #ifdef DEBUG_DEEP
   Serial.println(F("Info:Set DSP Control Register 1 MSW"));
   #endif
   DSP_CR101bits.BHPFV1 = 0;//1;//0;        //HPF enable voltage;DC cancellation
@@ -118,7 +118,7 @@ bool STPM::Init_STPM34() {
   dataMSB = DSP_CR101bits.MSB;
   sendFrameCRC(readAdd, writeAdd, dataLSB, dataMSB); //write to  CR1 register
 
-  #ifdef DEBUG
+  #ifdef DEBUG_DEEP
   Serial.println(F("Info:Set DSP Control Register 2 LSW"));
   #endif
   DSP_CR200bits.ENVREF2 = 1;       //enable internal Vref1 bit for CH1;
@@ -129,7 +129,7 @@ bool STPM::Init_STPM34() {
   dataMSB = DSP_CR200bits.MSB;
   sendFrameCRC(readAdd, writeAdd, dataLSB, dataMSB); //write to  CR2 register
 
-  #ifdef DEBUG
+  #ifdef DEBUG_DEEP
   Serial.println(F("Info:Set DSP Control Register 2 MSW"));
   #endif
   DSP_CR201bits.BHPFV2 = 0;//1;//0;        //HPF enable voltage;DC cancellation
@@ -163,7 +163,7 @@ bool STPM::Init_STPM34() {
   readFrame(0x18, readBuffer);
   bool success = checkGain(1, readBuffer);
   
-  #ifdef DEBUG
+  #ifdef DEBUG_DEEP
   Serial.println(F("Info:GAIN (Bit 26/27):"));
   printRegister(readBuffer, "GainC1:");
   Serial.println(F("Info:GAIN (Bit 26/27):"));
@@ -175,13 +175,13 @@ bool STPM::Init_STPM34() {
   readFrame(0x1A, readBuffer);
   success = success && checkGain(2, readBuffer);
 
-  #ifdef DEBUG
+  #ifdef DEBUG_DEEP
   printRegister(readBuffer, "GainC2:");
   Serial.print(F("Info:SetGain2: "));
   Serial.println(success ? "Success" : "Fail");
   #endif
 
-  #ifdef DEBUG
+  #ifdef DEBUG_DEEP
   Serial.println(F("Info:LPW: (Bit 24-27)"));
   readFrame(0x0, readBuffer);
   printRegister(readBuffer, "LPW1:");
@@ -202,14 +202,14 @@ void STPM::CRC(bool enabled) {
   if (_crcEnabled == enabled) return;
   // Disable CRC
   if (!enabled) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.println(F("Info:Disable CRC"));
     #endif
     US1_REG100bits.CRC_EN=0;         //disable CRC polynomial
     sendFrameCRC(0x24,0x24,US1_REG100bits.LSB,US1_REG100bits.MSB);
   // Enable CRC
   } else {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.println(F("Info:Enable CRC"));
     #endif
     US1_REG100bits.CRC_EN=1;         //disable CRC polynomial
@@ -220,7 +220,7 @@ void STPM::CRC(bool enabled) {
 
 
 void STPM::autoLatch(bool enabled) {
-  #ifdef DEBUG
+  #ifdef DEBUG_DEEP
   Serial.println(F("Info:Set DSP Control Register 3 LSW"));
   if (enabled) {
     Serial.println(F("Info:Automatic latching"));
@@ -293,7 +293,7 @@ void STPM::readAll(uint8_t channel, float *voltage, float *current, float* activ
 bool STPM::checkGain(uint8_t channel, uint8_t *buffer) {
   // Set current gain: 0x00 = 2, 0x01 = 4, 0x02 = 8, 0x03 = 16
   if (channel != 1 && channel != 2) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.print(F("Info:checkCurrentGain: Channel "));
     Serial.print(channel);
     Serial.println(F(" out of range"));
@@ -315,7 +315,7 @@ bool STPM::checkGain(uint8_t channel, uint8_t *buffer) {
 void STPM::setCurrentGain(uint8_t channel, Gain gain) {
   // Set current gain: 0x00 = 2, 0x01 = 4, 0x02 = 8, 0x03 = 16
   if (channel != 1 && channel != 2) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.print(F("Info:setCurrentGain: Channel "));
     Serial.print(channel);
     Serial.println(F(" out of range"));
@@ -395,7 +395,7 @@ float STPM::readTotalApparentEnergy() {
 float STPM::readActiveEnergy(uint8_t channel) {
   if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.print(F("Info:readActiveEnergy: Channel "));
     Serial.print(channel);
     Serial.println(F(" out of range"));
@@ -411,7 +411,7 @@ float STPM::readActiveEnergy(uint8_t channel) {
 float STPM::readFundamentalEnergy(uint8_t channel) {
   if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.print(F("Info:readFundamentalEnergy: Channel "));
     Serial.print(channel);
     Serial.println(F(" out of range"));
@@ -427,7 +427,7 @@ float STPM::readFundamentalEnergy(uint8_t channel) {
 float STPM::readReactiveEnergy(uint8_t channel) {
   if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.print(F("Info:readReactiveEnergy: Channel "));
     Serial.print(channel);
     Serial.println(F(" out of range"));
@@ -443,7 +443,7 @@ float STPM::readReactiveEnergy(uint8_t channel) {
 float STPM::readApparentEnergy(uint8_t channel) {
   if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.print(F("Info:readApparentEnergy: Channel "));
     Serial.print(channel);
     Serial.println(F(" out of range"));
@@ -459,7 +459,7 @@ float STPM::readApparentEnergy(uint8_t channel) {
 void STPM::readPower(uint8_t channel, float* active, float* fundamental, float* reactive, float* apparent) {
   if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.print(F("Info:readPower: Channel "));
     Serial.print(channel);
     Serial.println(F(" out of range"));
@@ -499,7 +499,7 @@ void STPM::readPower(uint8_t channel, float* active, float* fundamental, float* 
 float STPM::readActivePower(uint8_t channel) {
   if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.print(F("Info:readActivePower: Channel "));
     Serial.print(channel);
     Serial.println(F(" out of range"));
@@ -515,7 +515,7 @@ float STPM::readActivePower(uint8_t channel) {
 float STPM::readFundamentalPower(uint8_t channel) {
   if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.print(F("Info:readFundamentalPower: Channel "));
     Serial.print(channel);
     Serial.println(F(" out of range"));
@@ -531,7 +531,7 @@ float STPM::readFundamentalPower(uint8_t channel) {
 float STPM::readReactivePower(uint8_t channel) {
   if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.print(F("Info:readReactivePower: Channel "));
     Serial.print(channel);
     Serial.println(F(" out of range"));
@@ -547,7 +547,7 @@ float STPM::readReactivePower(uint8_t channel) {
 float STPM::readApparentRMSPower(uint8_t channel) {
   if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.print(F("Info:readApparentRMSPower: Channel "));
     Serial.print(channel);
     Serial.println(F(" out of range"));
@@ -563,7 +563,7 @@ float STPM::readApparentRMSPower(uint8_t channel) {
 float STPM::readApparentVectorialPower(uint8_t channel) {
   if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.print(F("Info:readApparentVectorialPower: Channel "));
     Serial.print(channel);
     Serial.println(F(" out of range"));
@@ -579,7 +579,7 @@ float STPM::readApparentVectorialPower(uint8_t channel) {
 float STPM::readMomentaryActivePower(uint8_t channel) {
   if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.print(F("Info:readMomentaryActivePower: Channel "));
     Serial.print(channel);
     Serial.println(F(" out of range"));
@@ -595,7 +595,7 @@ float STPM::readMomentaryActivePower(uint8_t channel) {
 float STPM::readMomentaryFundamentalPower(uint8_t channel) {
   if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.print(F("Info:readMomentaryFundamentalPower: Channel "));
     Serial.print(channel);
     Serial.println(F(" out of range"));
@@ -612,7 +612,7 @@ float STPM::readMomentaryFundamentalPower(uint8_t channel) {
 void STPM::readCurrentPhaseAndSwellTime(uint8_t channel, float* phase, float* swell) {
   if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.print(F("Info:readCurrentPhaseAndSwellTime: Channel "));
     Serial.print(channel);
     Serial.println(F(" out of range"));
@@ -632,7 +632,7 @@ void STPM::readCurrentPhaseAndSwellTime(uint8_t channel, float* phase, float* sw
 void STPM::readVoltageSagAndSwellTime(uint8_t channel, float* sag, float* swell) {
   if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.print(F("Info:readSagAndSwellTime: Channel "));
     Serial.print(channel);
     Serial.println(F(" out of range"));
@@ -704,7 +704,7 @@ void IRAM_ATTR STPM::readVoltageAndCurrent(uint8_t channel, float *voltage, floa
   if (!_autoLatch) latch();
 
   if (channel != 1 && channel != 2) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.print(F("Info:readVoltage: Channel "));
     Serial.print(channel);
     Serial.println(F(" out of range"));
@@ -734,7 +734,7 @@ void IRAM_ATTR STPM::readVoltageAndCurrent(uint8_t channel, float *voltage, floa
 float STPM::readVoltage(uint8_t channel) {
   if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.print(F("Info:readVoltage: Channel "));
     Serial.print(channel);
     Serial.println(F(" out of range"));
@@ -751,7 +751,7 @@ float STPM::readVoltage(uint8_t channel) {
 float STPM::readCurrent(uint8_t channel) {
   if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.print(F("Info:readCurrent: Channel "));
     Serial.print(channel);
     Serial.println(F(" out of range"));
@@ -768,7 +768,7 @@ float STPM::readCurrent(uint8_t channel) {
 float STPM::readFundamentalVoltage(uint8_t channel) {
   if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.print(F("Info:readFundamentalVoltage: Channel "));
     Serial.print(channel);
     Serial.println(F(" out of range"));
@@ -784,7 +784,7 @@ float STPM::readFundamentalVoltage(uint8_t channel) {
 void STPM::readRMSVoltageAndCurrent(uint8_t channel, float* voltage, float* current) {
   if (!_autoLatch) latch();
   if (channel != 1 && channel != 2) {
-    #ifdef DEBUG
+    #ifdef DEBUG_DEEP
     Serial.print(F("Info:readRMSVoltage: Channel "));
     Serial.print(channel);
     Serial.println(F(" out of range"));

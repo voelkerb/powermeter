@@ -17,7 +17,6 @@ Rtc::Rtc(int intPin) : logger(MultiLogger::getInstance()) {
   _intCB = NULL;
   lost = true;
   connected = false;
-  _now = DateTime(0);
 }
 
 
@@ -26,7 +25,6 @@ bool Rtc::init() {
   if (INT_PIN >= 0) pinMode(INT_PIN, INPUT_PULLUP);
   _rtc.begin();
 
-  Wire.setDebugFlags(0xffff, 0xffff);
   // Read temperature to see a DS3231 is connected
   float temp = _rtc.getTemperature();
   logger.log("Temp: %.2f", temp);
@@ -59,7 +57,7 @@ bool Rtc::enableInterrupt(int frequency, void (*cb)(void)) {
     logger.log("Need to init RTC with Pin to which RTC SQW out is connected");
     return false;
   }
-  // TODO: does this reset the sqwc counter?
+  // does this reset the sqwc counter?
   _rtc.adjust(_now);
   if (frequency == 1) {
     _rtc.writeSqwPinMode(DS3231_SquareWave1Hz);
@@ -88,7 +86,6 @@ void Rtc::disableInterrupt() {
 DateTime Rtc::update() {
   if (!connected) return DateTime(F(__DATE__), F(__TIME__));
   _now = _rtc.now();
-  // Serial.println(_now.timestamp());
   return _now;
 }
 

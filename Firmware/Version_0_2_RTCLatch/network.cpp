@@ -116,11 +116,11 @@ namespace Network
       case SYSTEM_EVENT_STA_DISCONNECTED:
         connected = false;
         apMode = false;
-        setupAP();
         // lets check for networks regularly
         checker.attach(CHECK_PERIODE, checkNetwork);
         logger.log("STA_DISCONNECTED");
         if (_onDisconnect) _onDisconnect();
+        setupAP();
         break;
       case SYSTEM_EVENT_STA_GOT_IP:
         connected = true;
@@ -154,6 +154,7 @@ namespace Network
     _onConnect = onConnect;
     _onDisconnect = onDisconnect;
     connected = true;
+    WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);
     WiFi.setHostname(_config->name);
     WiFi.onEvent(&wifiEvent);
     WiFi.mode(WIFI_AP_STA);
@@ -187,8 +188,7 @@ namespace Network
     logger.log("Setting up AP: %s", _config->name);
     WiFi.softAP(_config->name);
     // Check for known networks regularly
-    checker.detach();
-    checker.attach(CHECK_PERIODE, checkNetwork);
+    // checker.detach();
   }
 
   void scanNetwork( void * pvParameters ) {
@@ -234,7 +234,6 @@ namespace Network
       logger.log(WARNING, "No known network");
       // We setup an access point
       setupAP();
-      WiFi.mode(WIFI_AP_STA);
     }
 
     vTaskDelete( NULL );

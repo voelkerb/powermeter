@@ -11,7 +11,7 @@
 #include "timeHandling.h"
 
 // _________________________________________________________________________
-TimeHandler::TimeHandler(Rtc * rtc, const char * ntpServerName, int locationOffset, void (*ntpSyncCB)(void)) : logger(MultiLogger::getInstance()) {
+TimeHandler::TimeHandler(Rtc * rtc, const char * ntpServerName, int locationOffset, void (*ntpSyncCB)(void), DST dst) : logger(MultiLogger::getInstance()) {
   _rtc = rtc; 
   _ntpTaskHandle = NULL;
   _ntpServerName = ntpServerName;
@@ -24,6 +24,7 @@ TimeHandler::TimeHandler(Rtc * rtc, const char * ntpServerName, int locationOffs
   _currentSeconds = 0;
   _currentMilliseconds = 0;
   _ntpSyncCB = ntpSyncCB;
+  _dst = dst;
 }
 
 
@@ -209,17 +210,42 @@ char * TimeHandler::timeStr(DateTime dt, unsigned long ms, bool shortForm) {
   return _timeString;
 }
 
+
+// _________________________________________________________________________
+int TimeHandler::_dow(int y, int m, int d) { 
+  static int t[] = {0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4};
+  y -= m < 3; 
+  return (y + y/4 - y/100 + y/400 + t[m-1] + d) % 7; 
+}
+
+DateTime TimeHandler::timeZoneDST(unsigned long s) {
+  DateTime ttime(s + _locationOffset);
+  if (_dst.active) {
+    int startDay = 31 - _dow(ttime.year(), _dst.startMon, 31);
+    int stopDay = 31 - _dow(ttime.year(), _dst.stopMon, 31);
+    DateTime d1(ttime.year(), _dst.startMon, startDay, 1, 0, 0);
+    DateTime d2(ttime.year(), _dst.stopMon, stopDay, 1, 0, 0);
+    uint32_t tsD1 = d1.unixtime();
+    uint32_t tsD2 = d2.unixtime();
+    if (s >= tsD1 && s <= tsD2) {
+      return DateTime(s + _locationOffset +_dst.seconds);
+    }
+  }
+  return ttime;
+}
+
+
+
 // _________________________________________________________________________
 char * TimeHandler::timeStr(unsigned long s, unsigned long ms, bool shortForm) {
-  unsigned long slocal = s + _locationOffset;
   // Not valid maybe just return default
   if (s == 0) {
     if (xPortGetCoreID() != 0) {
     // vTaskEnterCritical();
-      _rtc->update();
+      _rtc->update(); 
     // vTaskExitCritical();
     }
     return timeStr(_rtc->_now, 0, shortForm);
   }
-  return timeStr(DateTime(slocal), ms, shortForm);
+  return timeStr(timeZoneDST(s), ms, shortForm);
 }

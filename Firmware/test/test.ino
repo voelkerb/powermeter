@@ -1,72 +1,104 @@
-extern "C" {
-  #include <esp_spiram.h>
-  #include <esp_himem.h>
-}
+#include "logger.h"
+#include "rtc.h"
 
+#define SERIAL_SPEED 2000000
+const char logPrefixSerial[] = "";
+const char logPrefix[] = "Info:";
 
-const int N = 3*1024*1024+1020;
-byte* buff;
+const int RTC_INT = 25;
+Rtc rtc(RTC_INT);
+
+// Serial logger
+StreamLogger serialLog((Stream*)&Serial, &timeStr, &logPrefixSerial[0], ALL);
+
+// TCP logger
+StreamLogger streamLog((Stream*)NULL, &timeStr, &logPrefix[0], INFO);
+
+const char * logFile = "/log.txt";
+// SPIFFS
+SPIFFSLogger spiffsLog(&logFile[0], &timeStr, &logPrefixSerial[0], WARNING);
+
+// MultiLogger logger(&streamLog, &timeStr);
+// Create singleton herer
+MultiLogger& logger = MultiLogger::getInstance();
+
 
 void setup() {
-  Serial.begin(2000000);
-
-  Serial.println("========================================");
-  Serial.printf("PSRAM total size     : %u \n", esp_spiram_get_size());
-  Serial.println("----------------------------------------");
-  Serial.printf("PSRAM first 4MB size : %u \n", ESP.getPsramSize());
-  Serial.printf("PSRAM first 4MB free : %u \n", ESP.getMaxAllocPsram());
-  Serial.printf("PSRAM HI-MEM    size : %u \n", esp_himem_get_phys_size());
-  Serial.printf("PSRAM HI-MEM    free : %u \n", esp_himem_get_free_size());
-  Serial.println("========================================");
-  Serial.printf("Internal RAM  size   : %u \n", ESP.getHeapSize());
-  Serial.printf("Internal RAM  free   : %u \n", ESP.getFreeHeap());
-  Serial.println("========================================");
-
-  Serial.println("Testing the free memory of PSRAM HI-MEM ...");
-
-
-
-
-  // ps_malloc
-  if (buff = (byte*)ps_malloc(sizeof(byte)*N))
-    Serial.println("ps_malloc succeeded");
-  else
-    Serial.println("ps_malloc failed");
-    /*
-  // heap_caps_malloc
-  if (buff = (byte*)heap_caps_malloc(sizeof(byte)*N, MALLOC_CAP_8BIT))
-    Serial.println("heap_caps_malloc succeeded");
-  else
-    Serial.println("heap_caps_malloc failed");
-  // heap_info
-  Serial.println("\nheap_info");
-  heap_caps_print_heap_info(MALLOC_CAP_8BIT);
-  Serial.println();*/
-
-
-  // test SPI RAM
-  Serial.print("Test 128B:"); testram(128);
-  Serial.print("Test 256B:"); testram(256);
-  Serial.print("Test  1KB:"); testram(1024);
-  Serial.print("Test 16KB:"); testram(16*1024);
-  Serial.print("Test 64KB:"); testram(64*1024);
-  Serial.print("Test  1MB:"); testram(1*1024*1024);
-  Serial.print("Test  4MB:"); testram(4*1024*1024);
+  rtc.init();
+  // Init the logging module
+  logger.setTimeGetter(&timeStr);
+  // Setup serial communication
+  Serial.begin(SERIAL_SPEED);
+  // Add Serial logger
+  logger.addLogger(&serialLog);
+  spiffsLog.init();
+  logger.addLogger(&spiffsLog);
 }
+#define MAX_LENGTH 200
+char buffer[MAX_LENGTH] = {'\0'};
 
 void loop() {
+  Serial.println(rtc.timeStr(rtc.update()));
+  if (Serial.available()) {
+    char c = Serial.read();
+    switch (c) {
+      case 'c':
+      case 'C':
+        spiffsLog.clear();
+        break;
+      case 'p':
+      case 'P':
+        spiffsLog.dumpLogfile();
+        break;
+      case 'q':
+      case 'Q':
+        spiffsLog.dumpLogfile(true);
+        break;
+      case 'w':
+      case 'W':
+        strcpy(&buffer[0], Serial.readStringUntil('\n').c_str());
+        logger.log(WARNING, &buffer[0]);
+        break;
+      case 'e':
+      case 'E':
+        strcpy(&buffer[0], Serial.readStringUntil('\n').c_str());
+        logger.log(ERROR, &buffer[0]);
+        break;
+      case 'i':
+      case 'I':
+        strcpy(&buffer[0], Serial.readStringUntil('\n').c_str());
+        logger.log(INFO, &buffer[0]);
+        break;
+      case 'd':
+      case 'D':
+        strcpy(&buffer[0], Serial.readStringUntil('\n').c_str());
+        logger.log(DEBUG, &buffer[0]);
+        break;
+      case 's':
+      case 'S':
+        spiffsLog.getFileSize();
+        break;
+      case 'l':
+      case 'L':
+        spiffsLog.listAllFiles();
+        break;
+      case 'a':
+      case 'A': {
+        bool hasRow = spiffsLog.nextRow(&buffer[0]);
+        int row = 0;
+        while(hasRow) {
+          Serial.printf("#%i: ", row++);
+          Serial.println(&buffer[0]);
+          hasRow = spiffsLog.nextRow(&buffer[0]);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
 }
 
-void testram(int ramSize) {
-  // Test SPI-RAM: write
-
-  for(uint64_t i=0; i<(ramSize); i++) {
-    buff[i] = (uint8_t)(i%255);
-  }
-  // Test SPI-RAM: verify
-  int e = 0;
-  for(uint64_t i=0; i<(ramSize); i++) {
-    if(buff[i] != (uint8_t)(i%255)) e++;
-  }
-  Serial.printf(" %7d Bytes: %7d OK, %7d Errors.\n",ramSize,ramSize-e,e);
+char * timeStr() {
+  return rtc.timeStr();
 }

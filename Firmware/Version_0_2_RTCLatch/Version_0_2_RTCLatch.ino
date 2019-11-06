@@ -54,6 +54,11 @@ void writeChunks(bool tail);
 void writeData(Stream &getter, uint16_t size);
 char * timeStr();
 
+TaskHandle_t xHandle = NULL;
+TaskHandle_t xHandleProducer = NULL;
+
+xQueueHandle xQueue;
+
 
 
 // Serial logger
@@ -193,9 +198,9 @@ uint32_t cp0_regs[18];
 void setup() {
   // Setup serial communication
   Serial.begin(SERIAL_SPEED);
-  printf("TCP_MSS:%u\n",TCP_MSS);
 
   // At first init the rtc module to get 
+  bool successAll = true;
   bool success = rtc.init();
   // Init the logging module
   logger.setTimeGetter(&timeStr);
@@ -206,6 +211,8 @@ void setup() {
   // Init all loggers
   logger.init();
 
+  if (!success) logger.log(ERROR, "Cannot init RTC");
+  successAll &= success;
   relay.set(true);
   // We do not need bluetooth, so disable it
   esp_bt_controller_disable();
@@ -224,12 +231,9 @@ void setup() {
   logger.log(DEBUG, "%s @ firmware %s/%s", config.name, __DATE__, __TIME__);
   logger.log(DEBUG, "Core @ %u MHz", coreFreq);
 
-  success &= ringBuffer.init();
-  if (success) {
-    logger.log(DEBUG, "Allocated %u Bytes of RAM\n", PS_BUF_SIZE);
-  } else {
-    logger.log(ERROR, "ps_malloc failed");
-  }
+  success = ringBuffer.init();
+  if (!success) logger.log(ERROR, "PSRAM init failed");
+  successAll &= success;
 
   // config.makeDefault();
   // config.store();
@@ -237,11 +241,13 @@ void setup() {
   timer_init();
 
   // Setup STPM 32
-  success &= stpm34.init();
+  success = stpm34.init();
+  if (!success) logger.log(ERROR, "STPM Init Failed");
+  successAll &= success;
 
   
    // Indicate error if there is any
-  digitalWrite(ERROR_LED, !success);
+  digitalWrite(ERROR_LED, !successAll);
 
   logger.log(ALL, "Connecting WLAN");
 
@@ -372,6 +378,7 @@ void onIdle() {
     // Look for people connecting over the server
     tcpClient = server.available();
     if (tcpClient.connected()) {
+      // tcpClient.setNoDelay(true);
       tcpConnected = true;
       // Set new udp ip
       streamConfig.ip = tcpClient.remoteIP();
@@ -525,6 +532,14 @@ void writeData(Stream &getter, uint16_t size) {
   if (sent > start) sentSamples += (sent-start)/streamConfig.measurementBytes;
 }
 
+
+
+// _____________________________________________________________________________
+typedef struct{
+  float adc[4] = { 0.0 };
+} CurrentADC;
+
+
 /****************************************************
  * ISR for sampling
  ****************************************************/
@@ -553,16 +568,29 @@ void IRAM_ATTR sample_ISR(){
     if (rtc.connected) timerAlarmDisable(timer);
   }
 
+  CurrentADC data;
   if (streamConfig.measures == STATE_VI) {
-    stpm34.readVoltAndCurr((float*) &values[0]);
+    stpm34.readVoltAndCurr((float*) &data.adc[0]);
     // stpm34.readVoltageAndCurrent(1, (float*) &values[0], (float*) &values[1]);
   } else if (streamConfig.measures == STATE_PQ) {
-    stpm34.readPower(1, (float*) &values[0], (float*) &values[2], (float*) &values[1], (float*) &values[2]);
+    stpm34.readPower(1, (float*) &data.adc[0], (float*) &data.adc[2], (float*) &data.adc[1], (float*) &data.adc[2]);
   } else if (streamConfig.measures == STATE_VIPQ) {
-    stpm34.readAll(1, (float*) &values[0], (float*) &values[1], (float*) &values[2], (float*) &values[3]);
+    stpm34.readAll(1, (float*) &data.adc[0], (float*) &data.adc[1], (float*) &data.adc[2], (float*) &data.adc[3]);
   }
 
-  ringBuffer.write((uint8_t*)&values[0], streamConfig.measurementBytes);
+  BaseType_t xHigherPriorityTaskWoken;
+  
+  BaseType_t xStatus = xQueueSendToBackFromISR( xQueue, &data,
+      &xHigherPriorityTaskWoken );
+
+  // check whether sending is ok or not
+  if( xStatus == pdPASS ) {
+  } else {
+    //timeout = true;
+    Serial.println("ISR error");
+  }
+
+
 
   if(cp_state) {
      // Restore FPU registers
@@ -571,7 +599,30 @@ void IRAM_ATTR sample_ISR(){
      // turn it back off
      xthal_set_cpenable(0);
    }
-   portEXIT_CRITICAL_ISR(&timerMux);
+  portEXIT_CRITICAL_ISR(&timerMux);
+  xTaskResumeFromISR( xHandle );
+
+}
+
+// _____________________________________________________________________________
+void consumerTask( void * parameter) {
+  vTaskSuspend( NULL );  // ISR wakes up the task
+
+  while(1){
+    CurrentADC data;
+    BaseType_t xStatus = xQueueReceive( xQueue, &data, 0);
+
+    if(xStatus != pdPASS) {
+      Serial.println("Queue timeout");
+    } else {
+    }
+    
+    ringBuffer.write((uint8_t*)&data.adc[0], streamConfig.measurementBytes);
+
+    if(!uxQueueMessagesWaiting(xQueue)) {
+      vTaskSuspend( NULL );  // release computing time, ISR wakes up the task.
+    }
+  }
 }
 
 
@@ -660,7 +711,13 @@ void handleEvent(Stream &getter) {
   DeserializationError error = deserializeJson(docRcv, command);
   // Test if parsing succeeds.
   if (error) {
-    logger.log(ERROR, "deserializeJson() failed: %s, msg: %s", error.c_str(), &command[0]);
+    // Remove all unallowed json characters to prevent error 
+    uint32_t len = strlen(command);
+    if (len > 10) len = 10;
+    for (int i = 0; i < len; i++) {
+      if (command[i] == '\r' || command[i] == '\n' || command[i] == '"' || command[i] == '}' || command[i] == '{') command[i] = '_';
+    }
+    logger.log(ERROR, "deserializeJson() failed: %.10s", &command[0]);
     return;
   }
   //docSend.clear();
@@ -826,11 +883,13 @@ void handleJSON(Stream &getter) {
   }
 
   /*********************** SWITCHING COMMAND ****************************/
+  // {"cmd":{"name":"switch", "payload":{"value":"true"}}}
   else if (strcmp(cmd, CMD_SWITCH) == 0) {
     // For switching we need value payload
     docSend["error"] = true;
-    const char* payloadValue = docRcv["cmd"]["payload"]["value"];
-    if (payloadValue == nullptr) {
+    JsonVariant payloadValue = root["cmd"]["payload"]["value"];
+    if (payloadValue.isNull()) {
+      docSend["error"] = false;
       docSend["msg"] = F("Info:Not a valid \"switch\" command");
       return;
     }
@@ -1113,7 +1172,17 @@ void calcChunkSize() {
 inline void startSampling() {
   startSampling(false);
 }
+
 void startSampling(bool waitVoltage) {
+  xQueue = xQueueCreate(200, sizeof(CurrentADC));
+  xTaskCreatePinnedToCore(  consumerTask,     /* Task function. */
+    "Consumer",       /* String with name of task. */
+    4096,            /* Stack size in words. */
+    NULL,             /* Parameter passed as input of the task */
+    10,                /* Priority of the task. */
+    &xHandle,            /* Task handle. */
+    1);
+
   // createPSRAM_TASK();
   // Reset all variables
   state = STATE_SAMPLE;

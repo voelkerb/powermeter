@@ -32,10 +32,22 @@
 // Try NTP only if we have not tried last 5s
 #define NTP_TRY_INTV 5000
 
+struct DST {
+  bool active;
+  uint8_t startdayOfWeek;
+  uint8_t startMon;
+  uint8_t startAfterDay;
+  uint8_t stopdayOfWeek;
+  uint8_t stopMon;
+  uint8_t stopAfterDay;
+  int32_t seconds;
+} ;
+
 class TimeHandler {
   public:
     // Constructor
-    TimeHandler(Rtc * rtc, const char * ntpServerName, int locationOffset, void (*ntpSyncCB)(void)=NULL);
+    TimeHandler(Rtc * rtc, const char * ntpServerName, int locationOffset, void (*ntpSyncCB)(void)=NULL,
+                DST dst = { true, 7, 3, 25, 7, 10, 25, 3600} );
 
     // Function to call if NTP should be updated
     // If wait is false, the update is performed in a background task
@@ -54,8 +66,11 @@ class TimeHandler {
     void update();
     // if ntp time is valid
     bool valid();
+    DateTime timeZoneDST(unsigned long s);
 
   private:
+    int _dow(int y, int m, int d);
+
     // Decorator function (static function required for freertos create task)
     // Effectively, this function calls _updateNTPTime() 
     static void _startUpdateNTPTime(void * pvParameters);
@@ -99,6 +114,7 @@ class TimeHandler {
     unsigned long _currentSeconds;
     // The current milliseconds
     unsigned long _currentMilliseconds;
+    DST _dst;
 
     MultiLogger &logger;
 

@@ -36,7 +36,7 @@ bool StreamLogger::init() {
 }
 
 
-//  #define DEBUG_SPIFFS_LOGGER
+ #define DEBUG_SPIFFS_LOGGER
 // ********************************* SPIFFS LOGGER ************************************* //
 SPIFFSLogger::SPIFFSLogger(bool autoFlush, const char * fileName, char * (*timeStrGetter)(void), 
                            const char * prefix, LogType type, int32_t maxFileSize):Logger(timeStrGetter, prefix, type) {
@@ -88,8 +88,8 @@ bool SPIFFSLogger::init() {
     _file[0].print(_timeStrGetter());
     _file[0].print(": ");
   } 
-  // _file[0].println("Reboot - inited SPIFFS Logger");
-  // _file[0].flush();
+  _file[0].println("Reboot - inited SPIFFS Logger");
+  _file[0].flush();
 
   for (int i = 0; i < NUM_FILES; i++) _rowsFile[i] = -1;
   
@@ -101,7 +101,6 @@ bool SPIFFSLogger::init() {
   }
   #endif
 
-  _currentRow = 0;
   _currentFile = -1;
   return true;
 }
@@ -253,7 +252,6 @@ void SPIFFSLogger::write(char * str) {
       // Get size of resulting buffer
       int n1 = strlen(&buffer[_bufferIndex][0]);
       int n2 = strlen(str);
-
       Serial.printf("n1: %i, n2: %i\n", n1, n2);
       // If would not fit, copy over
       if (n1+n2 >= BUF_SIZE-1) {
@@ -263,10 +261,13 @@ void SPIFFSLogger::write(char * str) {
         if (strlen(&buffer[_bufferIndex][0]) > 0) {
           _truncated = true;
         }
+        // TODO null terminate
         // Start is next buffer
         n1 = 0;
       }
-      memcpy(&buffer[_bufferIndex][n1], str, n2);
+      //if (n1+n2 >= BUF_SIZE-1) {
+      memcpy(&buffer[_bufferIndex][n1], str, n2+1);
+      //}
     }
     xSemaphoreGive(_mutex);
   }
@@ -289,7 +290,7 @@ void SPIFFSLogger::_write(char * str) {
   }
   _file[0].print(str);
   _file[0].flush();
-  _file[0].close();
+  // _file[0].close();
   #ifdef DEBUG_SPIFFS_LOGGER
   Serial.printf("Took: %lu ms\n", millis()-ttime);
   #endif
@@ -297,9 +298,9 @@ void SPIFFSLogger::_write(char * str) {
 
 void SPIFFSLogger::flush() {
   if (!_autoFlush) {
-    // Nothing to be done
-    if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) { 
-      if (strlen(&buffer[0][0]) > 0) {
+  // Nothing to be done
+    if (strlen(&buffer[0][0]) > 0) {
+      if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) { 
         Serial.println("flushing");
         _bufferIndex = (_bufferIndex + 1)%BUFFERS;
         if (_truncated) {
@@ -321,8 +322,9 @@ void SPIFFSLogger::flush() {
       }
       xSemaphoreGive(_mutex);
     }
+  } else {
+    _file[0].flush();
   }
-  _file[0].flush();
 }
 
 
@@ -370,13 +372,55 @@ bool MultiLogger::init() {
        success &= loggers[i]->init();
      }
   }
-  log(WARNING, "Resetted, reasons CPU1: %s, CPU2: %s", _reset_reason(rtc_get_reset_reason(0)), _reset_reason(rtc_get_reset_reason(1)));
+  for (int i = 0; i < MAX_LOG_STREAMS; i++) {
+     if (loggers[i] != NULL) {
+       loggers[i]->flush();
+     }
+  }
+  const char * r1 = _reset_reason(rtc_get_reset_reason(0));
+  const char * r2 = _reset_reason(rtc_get_reset_reason(1));
+  log(WARNING, "Resetted, reasons CPU 0: %s, 1: %s", r1, r2);
+
+  for (int i = 0; i < MAX_LOG_STREAMS; i++) {
+     if (loggers[i] != NULL) {
+       loggers[i]->flush();
+     }
+  }
   return success;
 }
 
+const char * MultiLogger::_logTypeToStr(LogType type) {
+  switch(type) {
+    case     ALL: return &LOG_ALL_TEXT[0];
+    case   DEBUG: return &LOG_DEBUG_TEXT[0];
+    case    INFO: return &LOG_INFO_TEXT[0];
+    case WARNING: return &LOG_WARNING_TEXT[0];
+    case   ERROR: return &LOG_ERROR_TEXT[0];
+    default     : return &LOG_INFO_TEXT[0];
+  }
+}
+
 const char * MultiLogger::_reset_reason(RESET_REASON reason) {
-  if (reason <= 16) return MY_RESET_REASON_TXT[reason];
-  else return MY_RESET_REASON_TXT[0];
+  // switch(reason) {
+  //   case  1: return &TXT_POWERON_RESET[0];
+  //   case  3: return &TXT_SW_RESET[0];
+  //   case  4: return &TXT_OWDT_RESET[0];
+  //   case  5: return &TXT_DEEPSLEEP_RESET[0];
+  //   case  6: return &TXT_SDIO_RESET[0];
+  //   case  7: return &TXT_TG0WDT_SYS_RESET[0];
+  //   case  8: return &TXT_TG1WDT_SYS_RESET[0];
+  //   case  9: return &TXT_RTCWDT_SYS_RESET[0];
+  //   case 10: return &TXT_INTRUSION_RESET[0];
+  //   case 11: return &TXT_TGWDT_CPU_RESET[0];
+  //   case 12: return &TXT_SW_CPU_RESET[0];
+  //   case 13: return &TXT_RTCWDT_CPU_RESET[0];
+  //   case 14: return &TXT_EXT_CPU_RESET[0];
+  //   case 15: return &TXT_RTCWDT_BROWN_OUT_RESET[0];
+  //   case 16: return &TXT_RTCWDT_RTC_RESET[0];
+  //   default: return &TXT_NO_MEAN[0];
+  // }
+  if (reason <= 16) return &MY_RESET_REASON_TXT[reason][0];
+  else return &MY_RESET_REASON_TXT[0][0];
 }
 
 
@@ -472,6 +516,7 @@ void MultiLogger::log(const char* _log, ...) {
     va_end(args);
 
     const char * typeStr = LOG_TYPE_TEXT[_currentLog];
+    // const char * typeStr = _logTypeToStr(_currentLog);
     for (int i = 0; i < MAX_LOG_STREAMS; i++) {
       if (loggers[i] != NULL && (uint8_t)loggers[i]->_type <= (uint8_t)_currentLog) {
         sprintf(_aLLStr, "%s%s%s: %s\r\n", loggers[i]->_prefix, typeStr, timeStr, _logText);

@@ -17,25 +17,22 @@
 #include "WProgram.h"
 #endif
 #include "SPIFFS.h"
-#include <rom/rtc.h>
 
 #define MAX_LOG_STREAMS 3
 #define MAX_LOG_TEXT_LENGTH 256
 #define MAX_TIME_TEXT_LENGTH 30
 #define MAX_TYPE_TEXT_LENGTH 10
-#define MAX_TEXT_LENGTH (MAX_LOG_TEXT_LENGTH+MAX_TIME_TEXT_LENGTH)
+#define MAX_TEXT_LENGTH MAX_LOG_TEXT_LENGTH+MAX_TIME_TEXT_LENGTH
 
-static const char * const LOG_TYPE_TEXT[] = {"[A]", "[D]", "[I]", "[W]", "[E]",};
-static const char NOTHING_TEXT[] = "";
-static const char BYTES[] = "Bytes";
-static const char KILO_BYTES[] = "kB";
-static const char MEGA_BYTES[] = "MB";
-
-static const char * const MY_RESET_REASON_TXT[] = {
-    "NO_MEAN", "POWERON_RESET", "NO_MEAN", "SW_RESET", "OWDT_RESET", "DEEPSLEEP_RESET", "SDIO_RESET", "TG0WDT_SYS_RESET", "TG1WDT_SYS_RESET",
-    "RTCWDT_SYS_RESET", "INTRUSION_RESET", "TGWDT_CPU_RESET", "SW_CPU_RESET", "RTCWDT_CPU_RESET", "EXT_CPU_RESET", "RTCWDT_BROWN_OUT_RESET",
-    "RTCWDT_RTC_RESET",
-};
+const char ERROR_TEXT[] = "[ERROR]";
+const char WARNING_TEXT[] = "[WARNING]";
+const char INFO_TEXT[] = "[INFO]";
+const char DEBUG_TEXT[] = "[DEBUG]";
+const char ALL_TEXT[] = "[ALL]";
+const char NOTHING_TEXT[] = "";
+const char BYTES[] = "Bytes";
+const char KILO_BYTES[] = "kB";
+const char MEGA_BYTES[] = "MB";
 
 enum LogType{ALL, DEBUG, INFO, WARNING, ERROR};
 
@@ -46,7 +43,7 @@ class Logger {
     virtual void write(const char * str);
     virtual void write(char * str);
     virtual void flush();
-    virtual bool init();
+    const char * logTypeToStr(LogType type);
 
     LogType _type;
     const char * _prefix;
@@ -60,23 +57,20 @@ class StreamLogger : public Logger {
     void write(const char * str);
     void write(char * str);
     void flush();
-    bool init();
     // Stream object which can be changed during runtime
     Stream * _stream;
 };
 
 
 class SPIFFSLogger : public Logger {
-  #define DEFAULT_MAX_FILESIZE (1024*20) // 20kb
-  #define BUFFERS 2
-  #define BUF_SIZE 1024
+  #define DEFAULT_MAX_FILESIZE 1024*20 // 20kb
   #define MAX_FILENAME_LENGTH 20
   #define NUM_FILES 2
   enum FileMode{Reading, Writing, Appending};
 
   public:
     // Open logger with file size limit in byte
-    SPIFFSLogger(bool autoFlush, const char * fileName, char * (*timeStrGetter)(void), const char * prefix, LogType type, int32_t maxFileSize=DEFAULT_MAX_FILESIZE);
+    SPIFFSLogger(const char * fileName, char * (*timeStrGetter)(void), const char * prefix, LogType type, int32_t maxFileSize=DEFAULT_MAX_FILESIZE);
     bool init();
     bool dumpLogfile(bool file2=false);
     bool clear();
@@ -88,24 +82,13 @@ class SPIFFSLogger : public Logger {
     void write(const char * str);
     void write(char * str);
     void flush();
-    
   private:
-    void _write(char * str);
     uint32_t _getFileSize(File file);
     bool _openFor(int index, FileMode mode);
     int _getRowsInFile(File file);
     void _fileSizeLimitReached();
     void _dumpFile(File file);
 
-    // If flushing should be performed automatically
-    // If not you have to call it
-    bool _autoFlush;
-    SemaphoreHandle_t _mutex; 
-    // Shows if flushing was not performed for some str
-    bool _truncated;
-    // Buffer str before flushing
-    char buffer[BUFFERS][BUF_SIZE];
-    size_t _bufferIndex;
     int _rowsFile[NUM_FILES];
     int _currentRow;
     int _currentFile;
@@ -120,13 +103,14 @@ class SPIFFSLogger : public Logger {
 
 
 class MultiLogger {
+  
   public:
     static MultiLogger& getInstance(){
       static MultiLogger instance;
       return instance;
     }
     // MultiLogger(Logger * logger, char * (*timeStrGetter)(void));
-    bool init();
+
     bool addLogger(Logger * logger);
     bool removeLogger(Logger * logger);
     void setTimeGetter(char * (*timeStrGetter)(void));
@@ -139,14 +123,14 @@ class MultiLogger {
     void log(const char* _log, ...);
     void append(const char* _log, ...);
     void append(char* _log, ...);
+    
+    const char * logTypeToStr(LogType type);
 
   private:
     MultiLogger();
     MultiLogger(const MultiLogger &);             // Prevent copy constructor
     MultiLogger & operator=(const MultiLogger &); // prevents copy
 
-
-    const char* _reset_reason(RESET_REASON reason);
     SemaphoreHandle_t w_mutex; // During write, we are not allowed to add or remove streams from the logger class
     Logger * loggers[MAX_LOG_STREAMS];
     

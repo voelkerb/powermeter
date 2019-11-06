@@ -37,6 +37,7 @@ class Rtc {
 
     DateTime _now;
   private:
+    char datestring[20];
     int INT_PIN;
     char _timeStr[50];
 
