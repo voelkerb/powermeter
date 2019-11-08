@@ -532,98 +532,58 @@ void writeData(Stream &getter, uint16_t size) {
 }
 
 
+static SemaphoreHandle_t timer_sem;
+volatile uint32_t mytime = micros();
 
-// _____________________________________________________________________________
-typedef struct{
-  float adc[4] = { 0.0 };
-} CurrentADC;
-
-
-/****************************************************
- * ISR for sampling
- ****************************************************/
-void IRAM_ATTR sample_ISR(){
-
-  portENTER_CRITICAL_ISR(&timerMux);
-  // get FPU state
-  uint32_t cp_state = xthal_get_cpenable();
-
-  // if it was enabled, save FPU registers
-  if(cp_state) {
-    xthal_save_cp0(cp0_regs);
-  // Else enable it
-  } else {
-    xthal_set_cpenable(1);
+void IRAM_ATTR sample_ISR() {
+  static BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+  //Serial.println("TIMERISR");
+  mytime = micros();
+  xSemaphoreGiveFromISR(timer_sem, &xHigherPriorityTaskWoken);
+  if ( xHigherPriorityTaskWoken) {
+    portYIELD_FROM_ISR(); // this wakes up sample_timer_task immediately
   }
-
-  // Vaiables for frequency count
-  counter++;
-  totalSamples++;
-  if (counter >= streamConfig.samplingRate) {
-    freqCalcNow = micros();
-    freq = freqCalcNow-freqCalcStart;
-    freqCalcStart = freqCalcNow;
-    counter = 0;
-    if (rtc.connected) timerAlarmDisable(timer);
-  }
-
-  CurrentADC data;
-  if (streamConfig.measures == STATE_VI) {
-    stpm34.readVoltAndCurr((float*) &data.adc[0]);
-    // stpm34.readVoltageAndCurrent(1, (float*) &values[0], (float*) &values[1]);
-  } else if (streamConfig.measures == STATE_PQ) {
-    stpm34.readPower(1, (float*) &data.adc[0], (float*) &data.adc[2], (float*) &data.adc[1], (float*) &data.adc[2]);
-  } else if (streamConfig.measures == STATE_VIPQ) {
-    stpm34.readAll(1, (float*) &data.adc[0], (float*) &data.adc[1], (float*) &data.adc[2], (float*) &data.adc[3]);
-  }
-
-  BaseType_t xHigherPriorityTaskWoken;
-  
-  BaseType_t xStatus = xQueueSendToBackFromISR( xQueue, &data,
-      &xHigherPriorityTaskWoken );
-
-  // check whether sending is ok or not
-  if( xStatus == pdPASS ) {
-  } else {
-    //timeout = true;
-    Serial.println("ISR error");
-  }
-
-
-
-  if(cp_state) {
-     // Restore FPU registers
-     xthal_restore_cp0(cp0_regs);
-   } else {
-     // turn it back off
-     xthal_set_cpenable(0);
-   }
-  portEXIT_CRITICAL_ISR(&timerMux);
-  xTaskResumeFromISR( xHandle );
-
 }
 
-// _____________________________________________________________________________
-void consumerTask( void * parameter) {
-  vTaskSuspend( NULL );  // ISR wakes up the task
+void IRAM_ATTR sample_timer_task(void *param) {
+  timer_sem = xSemaphoreCreateBinary();
 
-  while(1){
-    CurrentADC data;
-    BaseType_t xStatus = xQueueReceive( xQueue, &data, 0);
+  float data[4] = { 0.0 };
 
-    if(xStatus != pdPASS) {
-      Serial.println("Queue timeout");
-    } else {
+  int test = 0;
+
+  while (state == STATE_SAMPLE) {
+    xSemaphoreTake(timer_sem, portMAX_DELAY);
+    test++;
+    if (test%100 == 0) {
+      Serial.println(micros()-mytime);
     }
     
-    ringBuffer.write((uint8_t*)&data.adc[0], streamConfig.measurementBytes);
-
-    if(!uxQueueMessagesWaiting(xQueue)) {
-      vTaskSuspend( NULL );  // release computing time, ISR wakes up the task.
+    // Vaiables for frequency count
+    counter++;
+    totalSamples++;
+    if (counter >= streamConfig.samplingRate) {
+      freqCalcNow = micros();
+      freq = freqCalcNow-freqCalcStart;
+      freqCalcStart = freqCalcNow;
+      counter = 0;
+      if (rtc.connected) timerAlarmDisable(timer);
     }
-  }
-}
 
+    if (streamConfig.measures == STATE_VI) {
+      stpm34.readVoltAndCurr((float*) &data[0]);
+      // stpm34.readVoltageAndCurrent(1, (float*) &values[0], (float*) &values[1]);
+    } else if (streamConfig.measures == STATE_PQ) {
+      stpm34.readPower(1, (float*) &data[0], (float*) &data[2], (float*) &data[1], (float*) &data[2]);
+    } else if (streamConfig.measures == STATE_VIPQ) {
+      stpm34.readAll(1, (float*) &data[0], (float*) &data[1], (float*) &data[2], (float*) &data[3]);
+    }
+
+    ringBuffer.write((uint8_t*)&data[0], streamConfig.measurementBytes);
+
+  }
+  vTaskDelete( NULL );
+}
 
 
 // triggered each second to active a new generation of <samplingrate> samples 
@@ -1173,8 +1133,9 @@ inline void startSampling() {
 }
 
 void startSampling(bool waitVoltage) {
-  xQueue = xQueueCreate(200, sizeof(CurrentADC));
-  xTaskCreatePinnedToCore(  consumerTask,     /* Task function. */
+  // Reset all variables
+  state = STATE_SAMPLE;
+  xTaskCreatePinnedToCore(  sample_timer_task,     /* Task function. */
     "Consumer",       /* String with name of task. */
     4096,            /* Stack size in words. */
     NULL,             /* Parameter passed as input of the task */
@@ -1182,9 +1143,6 @@ void startSampling(bool waitVoltage) {
     &xHandle,            /* Task handle. */
     1);
 
-  // createPSRAM_TASK();
-  // Reset all variables
-  state = STATE_SAMPLE;
   counter = 0;
   sentSamples = 0;
   totalSamples = 0;
