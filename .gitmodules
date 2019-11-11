@@ -1,1 +1,25 @@
 
+[submodule "Firmware/Version_2_0/src/stpm"]
+	path = Firmware/Version_2_0/src/stpm
+	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.stpm
+[submodule "Firmware/Version_2_0/src/relay"]
+	path = Firmware/Version_2_0/src/relay
+	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.relay
+[submodule "Firmware/Version_2_0/src/network"]
+	path = Firmware/Version_2_0/src/network
+	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.network
+[submodule "Firmware/Version_2_0/src/logger"]
+	path = Firmware/Version_2_0/src/logger
+	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.logger
+[submodule "Firmware/Version_2_0/src/config"]
+	path = Firmware/Version_2_0/src/config
+	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.config
+[submodule "Firmware/Version_2_0/src/rtc"]
+	path = Firmware/Version_2_0/src/rtc
+	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.rtc
+[submodule "Firmware/Version_2_0/src/time"]
+	path = Firmware/Version_2_0/src/time
+	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.time
+[submodule "Firmware/Version_2_0/src/ringbuffer"]
+	path = Firmware/Version_2_0/src/ringbuffer
+	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.ringbuffer
