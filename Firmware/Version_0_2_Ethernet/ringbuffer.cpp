@@ -45,12 +45,29 @@ bool RingBuffer::init() {
   if (_psram) {
     _buffer = (uint8_t*)ps_malloc(_ring_buffer_size);
     if (_buffer == NULL) _psram = false;
-  } else _buffer = (uint8_t*)malloc(_ring_buffer_size);
+  } 
+  if (!_psram) _buffer = (uint8_t*)malloc(_ring_buffer_size);
 
   // Return success or not
   if (_buffer != NULL) return true;
   else return false;
 }
+
+bool RingBuffer::setSize(uint32_t size, bool inPSRAM) {
+  _ring_buffer_size = size;
+  _psram = inPSRAM;
+  if (_psram) {
+    _buffer = (uint8_t*)ps_malloc(size);
+    if (_buffer == NULL) _psram = false;
+  } 
+  if (!_psram) _buffer = (uint8_t*)malloc(size);
+
+
+  // Return success or not
+  if (_buffer != NULL) return true;
+  else return false;
+}
+
 
 uint32_t RingBuffer::available() {
   return _rwDistance();
@@ -106,5 +123,6 @@ bool RingBuffer::inPSRAM() {
 }
 
 size_t RingBuffer::getSize() {
-  return _ring_buffer_size;
+  if (_buffer != NULL) return _ring_buffer_size;
+  else return 0;
 }

@@ -17,28 +17,32 @@
 #include <Ticker.h>
 #include "config.h"
 #include "logger.h"
+#include <ETH.h>
 
 #if (ARDUINO >= 100)
 #include "Arduino.h"
 #else
 #include "WProgram.h"
 #endif
-// #define DEBUG_DEEP
+#define DEBUG_DEEP
 #define CHECK_PERIODE 60
 
 namespace Network {
     extern MultiLogger& logger;
     extern bool connected;
     extern bool apMode;
+    extern bool _ethernet;
 
     void init(Configuration * config);
-    void init(Configuration * config, void (*onConnect)(void), void (*onDisconnect)(void));
+    void init(Configuration * config, void (*onConnect)(void), void (*onDisconnect)(void), bool ethernet=false);
     bool update();
     bool connect(char * network, char * pswd);
     void setupAP();
+    IPAddress localIP();
     void wifiEvent(WiFiEvent_t event);
     void checkNetwork();
     void scanNetwork( void * pvParameters );
+
 }
 
 #endif

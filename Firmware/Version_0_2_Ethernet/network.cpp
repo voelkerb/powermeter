@@ -14,6 +14,7 @@ namespace Network
 {
   bool connected = false;
   bool apMode = false;
+  bool _ethernet = false;
   MultiLogger& logger = MultiLogger::getInstance();
 
   static Configuration * _config;
@@ -105,43 +106,72 @@ namespace Network
     }
     #endif
 
-    switch (event) {
-      case SYSTEM_EVENT_SCAN_DONE:
-        break;
-      case SYSTEM_EVENT_STA_CONNECTED:
-        apMode = false;
-        connected = true;
-        logger.log("STA_CONNECTED");
-        break;
-      case SYSTEM_EVENT_STA_DISCONNECTED:
-        connected = false;
-        apMode = false;
-        // lets check for networks regularly
-        checker.attach(CHECK_PERIODE, checkNetwork);
-        logger.log("STA_DISCONNECTED");
-        if (_onDisconnect) _onDisconnect();
-        setupAP();
-        break;
-      case SYSTEM_EVENT_STA_GOT_IP:
-        connected = true;
-        apMode = false;
-        checker.detach();
-        logger.log("STA_GOT_IP");
-        if (_onConnect) _onConnect();
-        break;
-      case SYSTEM_EVENT_AP_START:
-        connected = true;
-        apMode = true;
-        logger.log("AP_START");
-        if (_onConnect) _onConnect();
-        break;
-      case SYSTEM_EVENT_AP_STOP:
-        connected = false;
-        apMode = false;
-        logger.log("AP_STOP");
-        break;
-      default:
-        break;
+    if (_ethernet) {
+      switch (event) {
+        case SYSTEM_EVENT_ETH_START:
+          logger.log("ETH Started");
+          //set eth hostname here
+          ETH.setHostname(_config->name);
+          break;
+        case SYSTEM_EVENT_ETH_CONNECTED:
+          logger.log("ETH Connected");
+          break;
+        case SYSTEM_EVENT_ETH_GOT_IP:
+          logger.log("ETH MAC: %s, IP: %s, Speed: %iMbps", ETH.macAddress(), ETH.localIP().toString().c_str(), ETH.linkSpeed());
+          connected = true;
+          if (_onConnect) _onConnect();
+          break;
+        case SYSTEM_EVENT_ETH_DISCONNECTED:
+          logger.log("ETH Disconnected");
+          connected = false;
+          if (_onDisconnect) _onDisconnect();
+          break;
+        case SYSTEM_EVENT_ETH_STOP:
+          logger.log("ETH Stopped");
+          connected = false;
+          break;
+        default:
+          break;
+      }
+    } else {
+      switch (event) {
+        case SYSTEM_EVENT_SCAN_DONE:
+          break;
+        case SYSTEM_EVENT_STA_CONNECTED:
+          apMode = false;
+          connected = true;
+          logger.log("STA_CONNECTED");
+          break;
+        case SYSTEM_EVENT_STA_DISCONNECTED:
+          connected = false;
+          apMode = false;
+          // lets check for networks regularly
+          checker.attach(CHECK_PERIODE, checkNetwork);
+          logger.log("STA_DISCONNECTED");
+          if (_onDisconnect) _onDisconnect();
+          setupAP();
+          break;
+        case SYSTEM_EVENT_STA_GOT_IP:
+          connected = true;
+          apMode = false;
+          checker.detach();
+          logger.log("STA_GOT_IP");
+          if (_onConnect) _onConnect();
+          break;
+        case SYSTEM_EVENT_AP_START:
+          connected = true;
+          apMode = true;
+          logger.log("AP_START");
+          if (_onConnect) _onConnect();
+          break;
+        case SYSTEM_EVENT_AP_STOP:
+          connected = false;
+          apMode = false;
+          logger.log("AP_STOP");
+          break;
+        default:
+          break;
+      }
     }
   }
 
@@ -149,19 +179,30 @@ namespace Network
     init(config, NULL, NULL);
   }
 
-  void init(Configuration * config, void (*onConnect)(void), void (*onDisconnect)(void)) {
+  void init(Configuration * config, void (*onConnect)(void), void (*onDisconnect)(void), bool ethernet) {
     _config = config;
     _onConnect = onConnect;
     _onDisconnect = onDisconnect;
-    connected = true;
+    _ethernet = ethernet;
+    connected = false;
     WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);
-    WiFi.setHostname(_config->name);
     WiFi.onEvent(&wifiEvent);
-    WiFi.mode(WIFI_AP_STA);
-    // Disable wifi power saving
-    esp_wifi_set_ps(WIFI_PS_NONE);
-    checkNetwork();
-    checker.attach(CHECK_PERIODE, checkNetwork);
+    if (_ethernet) {
+      apMode = false;
+      ETH.begin();
+    } else {
+      WiFi.setHostname(_config->name);
+      WiFi.mode(WIFI_AP_STA);
+      // Disable wifi power saving
+      esp_wifi_set_ps(WIFI_PS_NONE);
+      checkNetwork();
+      checker.attach(CHECK_PERIODE, checkNetwork);
+    }
+  }
+
+  IPAddress localIP() {
+    if (_ethernet) return ETH.localIP();
+    else return WiFi.localIP(); 
   }
 
   bool connect(char * network, char * pswd) {

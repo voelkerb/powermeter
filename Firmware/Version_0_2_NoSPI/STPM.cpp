@@ -13,7 +13,6 @@
 #include "STPM.h"
 #include <SPI.h>
 
-#include "esp32-hal-spi.h"
 
 
 // Info:|31|30|29|28|27|26|25|24|23|22|21|20|19|18|17|16|15|14|13|12|11|10| 9| 8| 7| 6| 5| 4| 3| 2| 1| 0| 
@@ -36,10 +35,7 @@ DFE_CR201bits_t DFE_CR201bits;
 DSP_CR301bits_t DSP_CR301bits;
 DSP_CR500bits_t DSP_CR500bits;
 
-spi_t * _spi;
-uint32_t _div;
-uint32_t _freq;
-bool _inTransaction;
+
 
 STPM::STPM(int resetPin, int csPin, int synPin) {
   RESET_PIN = resetPin;
@@ -82,10 +78,6 @@ bool STPM::init() {
   delay(5);
   digitalWrite(CS_PIN, HIGH);
   SPI.begin();
-  _spi = SPI.bus();
-  _freq = spiSettings._clock;
-  _div = spiFrequencyToClockDiv(_freq);
-  _inTransaction = false;
   //SPI.beginTransaction(spiSettings);
   bool success = Init_STPM34();
   #ifdef DEBUG_DEEP
@@ -656,51 +648,23 @@ void STPM::readVoltageSagAndSwellTime(uint8_t channel, float* sag, float* swell)
   *sag = (buffer16to30(readBuffer));
 }
 
-// Just a test if IRAM ATTR helps
-void IRAM_ATTR beginTransactionSafe(SPISettings settings) {
-  //check if last freq changed
-  uint32_t cdiv = spiGetClockDiv(_spi);
-  if(_freq != settings._clock || _div != cdiv) {
-    _freq = settings._clock;
-    _div = spiFrequencyToClockDiv(_freq);
-  }
-  spiTransaction(_spi, _div, settings._dataMode, settings._bitOrder);
-  _inTransaction = true;
-}
-
-void IRAM_ATTR endTransactionSafe()
-{
-  if(_inTransaction){
-      _inTransaction = false;
-      spiEndTransaction(_spi);
-  }
-}
-
-uint8_t IRAM_ATTR transferSafe(uint8_t data)
-{
-    if(_inTransaction){
-        return spiTransferByteNL(_spi, data);
-    }
-    return spiTransferByte(_spi, data);
-}
-
 int32_t value = 0;
 void IRAM_ATTR STPM::readVoltAndCurr(float *data) {
     if (!_autoLatch) {
       #ifdef SPI_LATCH
         DSP_CR301bits.SW_Latch1 = 1;      // Register latch
         DSP_CR301bits.SW_Latch2 = 1;      // Register latch
-        beginTransactionSafe(spiSettings);
+        SPI.beginTransaction(spiSettings);
         digitalWrite(CS_PIN, LOW);
-        //delayMicroseconds(5);
-        transferSafe(0x05);
-        transferSafe(0x05);
-        transferSafe(DSP_CR301bits.LSB);
-        transferSafe(DSP_CR301bits.MSB);
+        SPI.transfer(0x05);
+        SPI.transfer(0x05);
+        SPI.transfer(DSP_CR301bits.LSB);
+        SPI.transfer(DSP_CR301bits.MSB);
         //delayMicroseconds(5);
         digitalWrite(CS_PIN, HIGH);
-        endTransactionSafe();
-        delayMicroseconds(2);
+        SPI.endTransaction();
+        // TODO: Required, see datasheet?
+        delayMicroseconds(4);
       #else
         digitalWrite(SYN_PIN, LOW);
         delayMicroseconds(4);
@@ -708,32 +672,32 @@ void IRAM_ATTR STPM::readVoltAndCurr(float *data) {
         delayMicroseconds(4);
       #endif
     }
-    beginTransactionSafe(spiSettings);
+    SPI.beginTransaction(spiSettings);
     address = V1_Data_Address;
     digitalWrite(CS_PIN, LOW);
     //delayMicroseconds(500);
-    transferSafe(address);
-    transferSafe(0xff);
-    transferSafe(0xff);
-    transferSafe(0xff);
+    SPI.transfer(address);
+    SPI.transfer(0xff);
+    SPI.transfer(0xff);
+    SPI.transfer(0xff);
     digitalWrite(CS_PIN, HIGH);
     delayMicroseconds(4);
     digitalWrite(CS_PIN, LOW);
-    readBuffer[0] = transferSafe(0xff);
-    readBuffer[1] = transferSafe(0xff);
-    readBuffer[2] = transferSafe(0xff);
-    readBuffer[3] = transferSafe(0xff);
+    readBuffer[0] = SPI.transfer(0xff);
+    readBuffer[1] = SPI.transfer(0xff);
+    readBuffer[2] = SPI.transfer(0xff);
+    readBuffer[3] = SPI.transfer(0xff);
     value = (((readBuffer[3] << 24) | (readBuffer[2] << 16)) | (readBuffer[1] << 8)) | readBuffer[0];
     data[0] = ((float)value/*-14837*/)*0.000138681;
-    readBuffer[0] = transferSafe(0xff);
-    readBuffer[1] = transferSafe(0xff);
-    readBuffer[2] = transferSafe(0xff);
-    readBuffer[3] = transferSafe(0xff);
+    readBuffer[0] = SPI.transfer(0xff);
+    readBuffer[1] = SPI.transfer(0xff);
+    readBuffer[2] = SPI.transfer(0xff);
+    readBuffer[3] = SPI.transfer(0xff);
     digitalWrite(CS_PIN, HIGH);
     value = (((readBuffer[3] << 24) | (readBuffer[2] << 16)) | (readBuffer[1] << 8)) | readBuffer[0];
     data[1] = ((float)value/*-14837*/)* 0.003349213;
 
-    endTransactionSafe();
+    SPI.endTransaction();
 }
 
 void IRAM_ATTR STPM::readVoltageAndCurrent(uint8_t channel, float *voltage, float *current) {
