@@ -1,13 +1,13 @@
 
 
 // Serial Speed and DEBUG option
-#define SERIAL_SPEED 9600
+#define SERIAL_SPEED 115200
 // #define SERIAL_SPEED 2000000
 // #define DEBUG_DEEP
 #define SENT_LIFENESS_TO_CLIENTS
 
 
-#define VERSION "0.2_x_rtc"
+#define VERSION "2.0"
 
 // Default values
 #define STANDARD_UDP_PORT 54323
@@ -51,6 +51,8 @@ const int RTC_RST = 32;
 #define MAX_SEND_SIZE 512 // 1024
 // PSRAM Buffer
 const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
+const int RAM_BUF_SIZE = 40*1024;
+
 #define COMMAND_MAX_SIZE 400
 
 // Communication commands

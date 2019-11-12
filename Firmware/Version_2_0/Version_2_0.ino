@@ -15,14 +15,14 @@
 #include <rom/rtc.h>
 
 #include "constDefine.h"
-#include "libraries/logger/logger.h"
-#include "libraries/stpm/STPM.h"
-#include "libraries/relay/relay.h"
-#include "libraries/rtc/rtc.h"
-#include "libraries/config/config.h"
-#include "libraries/ringbuffer/ringbuffer.h"
-#include "libraries/network/network.h"
-#include "libraries/time/timeHandling.h"
+#include "src/logger/logger.h"
+#include "src/stpm/STPM.h"
+#include "src/relay/relay.h"
+#include "src/network/network.h"
+#include "src/rtc/rtc.h"
+#include "src/config/config.h"
+#include "src/time/timeHandling.h"
+#include "src/ringbuffer/ringbuffer.h"
 
 
 // Function prototypes required for e.g. platformio
@@ -213,8 +213,7 @@ void setup() {
   if (!success) logger.log(ERROR, "Cannot init RTC");
   successAll &= success;
   relay.set(true);
-  // We do not need bluetooth, so disable it
-  esp_bt_controller_disable();
+
   pinMode(ERROR_LED, OUTPUT);
 
   // Indicate lifeness / reset
@@ -233,9 +232,11 @@ void setup() {
   success = ringBuffer.init();
   if (!success) logger.log(ERROR, "PSRAM init failed");
   successAll &= success;
-
-  // config.makeDefault();
-  // config.store();
+  // Try to use internal ram for buffering, but still indicate the missing ram
+  if (!success) {
+    success = ringBuffer.setSize(RAM_BUF_SIZE, false);
+    if (!success) logger.log(ERROR, "RAM init failed: %i bytes", RAM_BUF_SIZE);
+  }
 
   timer_init();
 
@@ -315,7 +316,7 @@ char * timeStr() {
 
 void onWifiConnect() {
   logger.log(ALL, "Wifi Connected");
-  logger.log(ALL, "IP: %s", WiFi.localIP().toString().c_str());
+  logger.log(ALL, "IP: %s", Network::localIP().toString().c_str());
   // The stuff todo if we have a network connection (and hopefully internet as well)
   if (Network::connected and not Network::apMode) {
     myTime.updateNTPTime();
@@ -532,32 +533,33 @@ void writeData(Stream &getter, uint16_t size) {
 }
 
 
+// Semaphore for communication between ISR and sample timer task 
 static SemaphoreHandle_t timer_sem;
-volatile uint32_t mytime = micros();
+// volatile uint32_t mytime = micros();
 
 void IRAM_ATTR sample_ISR() {
   static BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-  //Serial.println("TIMERISR");
-  mytime = micros();
+  // mytime = micros();
   xSemaphoreGiveFromISR(timer_sem, &xHigherPriorityTaskWoken);
   if ( xHigherPriorityTaskWoken) {
     portYIELD_FROM_ISR(); // this wakes up sample_timer_task immediately
   }
 }
 
+// Sample timer task inited once and in while loop is triggered from interrupt to sample one data point
 void IRAM_ATTR sample_timer_task(void *param) {
   timer_sem = xSemaphoreCreateBinary();
 
   float data[4] = { 0.0 };
 
-  int test = 0;
+  // int test = 0;
 
   while (state == STATE_SAMPLE) {
     xSemaphoreTake(timer_sem, portMAX_DELAY);
-    test++;
-    if (test%100 == 0) {
-      Serial.println(micros()-mytime);
-    }
+    // test++;
+    // if (test%100 == 0) {
+    //   Serial.println(micros()-mytime);
+    // }
     
     // Vaiables for frequency count
     counter++;
@@ -579,9 +581,11 @@ void IRAM_ATTR sample_timer_task(void *param) {
       stpm34.readAll(1, (float*) &data[0], (float*) &data[1], (float*) &data[2], (float*) &data[3]);
     }
 
-    ringBuffer.write((uint8_t*)&data[0], streamConfig.measurementBytes);
+    bool success = ringBuffer.write((uint8_t*)&data[0], streamConfig.measurementBytes);
+    if (!success) logger.log(ERROR, "Overflow during ringBuffer write");
 
   }
+  //  Task will delete itself here
   vTaskDelete( NULL );
 }
 
@@ -872,7 +876,7 @@ void handleJSON(Stream &getter) {
     docSend["sample_duration"] = samplingDuration;
     docSend["samples"] = totalSamples;
     docSend["sent_samples"] = sentSamples;
-    docSend["ip"] = WiFi.localIP().toString();
+    docSend["ip"] = Network::localIP().toString();
     docSend["avg_rate"] = totalSamples/(samplingDuration/1000.0);
     docSend["cmd"] = CMD_STOP;
   }
@@ -902,7 +906,7 @@ void handleJSON(Stream &getter) {
     docSend["compiled"] = compiled;
     docSend["sys_time"] = myTime.timeStr();
     docSend["name"] = config.name;
-    docSend["ip"] = WiFi.localIP().toString();
+    docSend["ip"] = Network::localIP().toString();
     docSend["sampling_rate"] = streamConfig.samplingRate;
     docSend["buffer_size"] = ringBuffer.getSize();
     docSend["psram"] = ringBuffer.inPSRAM();
