@@ -33,8 +33,8 @@ void handleJSON();
 void initMDNS();
 void onIdle();
 void onSampling();
-void onWifiConnect();
-void onWifiDisconnect();
+void onNetworkConnect();
+void onNetworkDisconnect();
 char * printCurrentTime();
 char * printDuration(unsigned long ms);
 char * printTime(unsigned long s, unsigned long ms);
@@ -178,20 +178,10 @@ volatile int sqwCounter = 0;
 
 volatile float values[4] = {0};
 
-// FPU register state
-uint32_t cp0_regs[18];
-
-
 #ifdef ARDUINO_ARCH_ESP32
 #include "esp32-hal-log.h"
 #endif
 
-
-// How can we change those parameters in Arduino, possible?
-// CONFIG_TCP_MSS=1436
-// CONFIG_TCP_MSL=60000
-// CONFIG_TCP_SND_BUF_DEFAULT=5744
-// CONFIG_TCP_WND_DEFAULT=5744
 
 /************************ SETUP *************************/
 void setup() {
@@ -249,9 +239,9 @@ void setup() {
    // Indicate error if there is any
   digitalWrite(ERROR_LED, !successAll);
 
-  logger.log(ALL, "Connecting WLAN");
+  logger.log(ALL, "Connecting Network");
 
-  Network::init(&config, onWifiConnect, onWifiDisconnect);
+  Network::init(&config, onNetworkConnect, onNetworkDisconnect);
   setupOTA();
 
   response.reserve(2*COMMAND_MAX_SIZE);
@@ -314,8 +304,8 @@ char * timeStr() {
   return ttime;
 }
 
-void onWifiConnect() {
-  logger.log(ALL, "Wifi Connected");
+void onNetworkConnect() {
+  logger.log(ALL, "Network Connected");
   logger.log(ALL, "IP: %s", Network::localIP().toString().c_str());
   // The stuff todo if we have a network connection (and hopefully internet as well)
   if (Network::connected and not Network::apMode) {
@@ -336,11 +326,11 @@ void onWifiConnect() {
   mdnsUpdate = millis();
 }
 
-void onWifiDisconnect() {
-  logger.log(ERROR, "Wifi Disconnected");
+void onNetworkDisconnect() {
+  logger.log(ERROR, "Network Disconnected");
 
   if (state != STATE_IDLE) {
-    logger.log(ERROR, "Stop sampling (Wifi disconnect)");
+    logger.log(ERROR, "Stop sampling (Network disconnect)");
     stopSampling();
   }
 }
@@ -534,14 +524,14 @@ void writeData(Stream &getter, uint16_t size) {
 
 
 // Semaphore for communication between ISR and sample timer task 
-static SemaphoreHandle_t timer_sem;
+static SemaphoreHandle_t timer_sem = xSemaphoreCreateBinary();
 // volatile uint32_t mytime = micros();
 
 void IRAM_ATTR sample_ISR() {
   static BaseType_t xHigherPriorityTaskWoken = pdFALSE;
   // mytime = micros();
   xSemaphoreGiveFromISR(timer_sem, &xHigherPriorityTaskWoken);
-  if ( xHigherPriorityTaskWoken) {
+  if (xHigherPriorityTaskWoken) {
     portYIELD_FROM_ISR(); // this wakes up sample_timer_task immediately
   }
 }
