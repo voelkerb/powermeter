@@ -7,7 +7,7 @@
 #define SENT_LIFENESS_TO_CLIENTS
 
 
-#define VERSION "1.0"
+#define VERSION "2.0"
 
 // Default values
 #define STANDARD_UDP_PORT 54323
