@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE eagle SYSTEM "eagle.dtd">
-<eagle version="9.5.0">
+<eagle version="8.4.3">
 <drawing>
 <settings>
 <setting alwaysvectorfont="no"/>
@@ -243,9 +243,6 @@ Block, Siemens and generic&lt;p&gt;
 <packages3d>
 <package3d name="S14K250" urn="urn:adsk.eagle:package:30590/1" type="box" library_version="2">
 <description>VARISTOR</description>
-<packageinstances>
-<packageinstance name="S14K250"/>
-</packageinstances>
 </package3d>
 </packages3d>
 </library>
@@ -1540,22 +1537,13 @@ MELF 0.25 W</description>
 <packages3d>
 <package3d name="R0402" urn="urn:adsk.eagle:package:26058/1" type="box" library_version="1">
 <description>RESISTOR</description>
-<packageinstances>
-<packageinstance name="R0402"/>
-</packageinstances>
 </package3d>
 <package3d name="R0603" urn="urn:adsk.eagle:package:26057/1" type="box" library_version="1">
 <description>RESISTOR</description>
-<packageinstances>
-<packageinstance name="R0603"/>
-</packageinstances>
 </package3d>
 <package3d name="M1206" urn="urn:adsk.eagle:package:26088/1" type="box" library_version="1">
 <description>RESISTOR
 MELF 0.25 W</description>
-<packageinstances>
-<packageinstance name="M1206"/>
-</packageinstances>
 </package3d>
 </packages3d>
 </library>
@@ -2676,28 +2664,16 @@ KEMET V / EIA 7343-20, KEMET X / EIA 7343-43 Wafe solder</description>
 <package3d name="CAPC1005X60" urn="urn:adsk.eagle:package:23626/2" type="model" library_version="11">
 <description>Chip, 1.00 X 0.50 X 0.60 mm body
 &lt;p&gt;Chip package with body size 1.00 X 0.50 X 0.60 mm&lt;/p&gt;</description>
-<packageinstances>
-<packageinstance name="C0402"/>
-</packageinstances>
 </package3d>
 <package3d name="C0603" urn="urn:adsk.eagle:package:23616/2" type="model" library_version="11">
 <description>CAPACITOR</description>
-<packageinstances>
-<packageinstance name="C0603"/>
-</packageinstances>
 </package3d>
 <package3d name="C0805" urn="urn:adsk.eagle:package:23617/2" type="model" library_version="11">
 <description>CAPACITOR</description>
-<packageinstances>
-<packageinstance name="C0805"/>
-</packageinstances>
 </package3d>
 <package3d name="D/7343-31W" urn="urn:adsk.eagle:package:23414/2" type="model" library_version="11">
 <description>Chip Capacitor Type KEMET D / EIA 7343-21
 KEMET V / EIA 7343-20, KEMET X / EIA 7343-43 Wafe solder</description>
-<packageinstances>
-<packageinstance name="D/7343-31W"/>
-</packageinstances>
 </package3d>
 </packages3d>
 </library>
@@ -3046,9 +3022,6 @@ Distributor: Bürklin 05 F 270</description>
 <description>FASTON 6.3 mm x 0.8 mm DIN 46342 Teil 1
 Flachstecker Typ Vogt 3866B.68 (F061.100)
 Distributor: Bürklin 05 F 270</description>
-<packageinstances>
-<packageinstance name="F061.100"/>
-</packageinstances>
 </package3d>
 </packages3d>
 </library>
@@ -3075,9 +3048,6 @@ Distributor: Bürklin 05 F 270</description>
 <packages3d>
 <package3d name="3,0" urn="urn:adsk.eagle:package:14277/1" type="box" library_version="2">
 <description>MOUNTING HOLE 3.0 mm with drill center</description>
-<packageinstances>
-<packageinstance name="3,0"/>
-</packageinstances>
 </package3d>
 </packages3d>
 </library>
@@ -3463,10 +3433,6 @@ design rules under a new name.</description>
 <param name="checkFont" value="1"/>
 <param name="checkRestrict" value="1"/>
 <param name="checkStop" value="0"/>
-<param name="checkValues" value="0"/>
-<param name="checkNames" value="1"/>
-<param name="checkWireStubs" value="1"/>
-<param name="checkPolygonWidth" value="0"/>
 <param name="useDiameter" value="13"/>
 <param name="maxErrors" value="50"/>
 </designrules>
@@ -3846,7 +3812,7 @@ design rules under a new name.</description>
 <attribute name="PRICE" value="None" x="52.994" y="27.89" size="1.778" layer="27" rot="R270" display="off"/>
 <attribute name="VALUE" x="35.6052" y="36.35888125" size="1.272840625" layer="27" rot="R270"/>
 </element>
-<element name="C1" library="rcl" library_urn="urn:adsk.eagle:library:334" package="C0402" package3d_urn="urn:adsk.eagle:package:23626/2" value="1nF" x="59.3982" y="39.9854" smashed="yes">
+<element name="C1" library="rcl" library_urn="urn:adsk.eagle:library:334" package="C0402" package3d_urn="urn:adsk.eagle:package:23626/2" value="100nF" x="59.3982" y="39.9854" smashed="yes">
 <attribute name="NAME" x="60.8714" y="39.4774" size="1.016" layer="25"/>
 <attribute name="POPULARITY" value="18" x="59.3982" y="39.9854" size="1.778" layer="27" display="off"/>
 <attribute name="SPICEPREFIX" value="C" x="59.3982" y="39.9854" size="1.778" layer="27" display="off"/>
@@ -4990,13 +4956,6 @@ design rules under a new name.</description>
 <contactref element="ESP32" pad="6"/>
 </signal>
 </signals>
-<mfgpreviewcolors>
-<mfgpreviewcolor name="soldermaskcolor" color="0xC8008000"/>
-<mfgpreviewcolor name="silkscreencolor" color="0xFFFEFEFE"/>
-<mfgpreviewcolor name="backgroundcolor" color="0xFF282828"/>
-<mfgpreviewcolor name="coppercolor" color="0xFFFFBF00"/>
-<mfgpreviewcolor name="substratecolor" color="0xFF786E46"/>
-</mfgpreviewcolors>
 <errors>
 <approved hash="19,16,77dda658f4346581"/>
 <approved hash="19,16,fb825a3a7ba460d3"/>

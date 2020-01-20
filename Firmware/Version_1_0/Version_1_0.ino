@@ -26,7 +26,7 @@ extern "C" {
 #define DEBUG
 //#define SENT_LIFENESS_TO_CLIENTS
 
-#define VERSION "0.2_x"
+#define VERSION "1.0"
 #define STANDARD_UDP_PORT 54323
 #define STANDARD_TCP_SAMPLE_PORT 54321
 #define STANDARD_TCP_STREAM_PORT 54322
@@ -55,7 +55,7 @@ volatile long lastTs = 0;
 // Number of bytes for one measurement
 int MEASURMENT_BYTES = 8; //(16+2)
 // Chunk sizes of data to send
-#define BUF_SIZE (4096*10)
+#define BUF_SIZE (4096*4)
 uint32_t chunkSize = 256;
 // Circular chunked buffer
 static uint8_t buffer[BUF_SIZE] = {0};
@@ -70,8 +70,8 @@ volatile uint16_t writePtr = 0;
 volatile uint16_t nextWritePtr = 0;
 
 // WLAN configuration
-const char *ssids[] = {"energywifi", "esewifi"};
-const char *passwords[] = {"silkykayak943", "silkykayak943"};
+const char *ssids[] = {"energywifi", "esewifi", "ubilab_wifi"};
+const char *passwords[] = {"silkykayak943", "silkykayak943", "ohg4xah3oufohreiPe7e"};
 
 // Open two TCP ports, one for commands and sampling and one for a raw data stream
 WiFiServer server(STANDARD_TCP_SAMPLE_PORT);
@@ -160,10 +160,10 @@ long mdnsUpdate = millis();
 
 
 
-const char* host = "esp8266-webupdate";
-const char* update_path = "/firmware";
-const char* update_username = "admin";
-const char* update_password = "admin";
+// const char* host = "esp8266-webupdate";
+// const char* update_path = "/firmware";
+// const char* update_username = "admin";
+// const char* update_password = "admin";
 
 
 // ESP8266WebServer httpServer(80);
@@ -395,7 +395,7 @@ void setupOTA() {
 
 
   // No authentication by default
-  ArduinoOTA.setPassword("admin");
+  ArduinoOTA.setPassword("energy");
 
   // Password can be set with it's md5 value as well
   // MD5(admin) = 21232f297a57a5a743894a0e4a801fc3
@@ -807,8 +807,9 @@ void handleJSON() {
   else if (strcmp(cmd, CMD_SWITCH) == 0) {
     // For switching we need value payload
     docSend["error"] = true;
-    const char* payloadValue = docRcv["cmd"]["payload"]["value"];
-    if (payloadValue == nullptr) {
+    JsonVariant payloadValue = root["cmd"]["payload"]["value"];
+    if (payloadValue.isNull()) {
+      docSend["error"] = false;
       docSend["msg"] = F("Info:Not a valid \"switch\" command");
       return;
     }
