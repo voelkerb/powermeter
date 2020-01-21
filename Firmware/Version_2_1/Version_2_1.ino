@@ -25,6 +25,7 @@
 #include "src/ringbuffer/ringbuffer.h"
 
 
+
 // Function prototypes required for e.g. platformio
 void calcChunkSize();
 bool getTimeNTP();
@@ -33,8 +34,8 @@ void handleJSON();
 void initMDNS();
 void onIdle();
 void onSampling();
-void onNetworkConnect();
-void onNetworkDisconnect();
+void onWifiConnect();
+void onWifiDisconnect();
 char * printCurrentTime();
 char * printDuration(unsigned long ms);
 char * printTime(unsigned long s, unsigned long ms);
@@ -54,16 +55,9 @@ void writeData(Stream &getter, uint16_t size);
 char * timeStr();
 
 TaskHandle_t xHandle = NULL;
-TaskHandle_t xHandleProducer = NULL;
-
-xQueueHandle xQueue;
-
-
 
 // Serial logger
 StreamLogger serialLog((Stream*)&Serial, &timeStr, &LOG_PREFIX_SERIAL[0], ALL);
-// TCP logger
-StreamLogger streamLog((Stream*)NULL, &timeStr, &LOG_PREFIX[0], INFO);
 // SPIFFS logger
 SPIFFSLogger spiffsLog(false, &LOG_FILE[0], &timeStr, &LOG_PREFIX_SERIAL[0], WARNING);
 
@@ -106,8 +100,6 @@ volatile uint32_t timer_next;
 volatile uint32_t timer_now;
 
 
-enum StreamType{USB, TCP, UDP, TCP_RAW};
-
 // Internal state machine for sampling
 enum SampleState{STATE_IDLE, STATE_SAMPLE};
 
@@ -116,6 +108,7 @@ SampleState next_state = STATE_IDLE;
 
 // Available measures are VOLTAGE+CURRENT, ACTIVE+REACTIVE Power or both
 enum Measures{STATE_VI, STATE_PQ, STATE_VIPQ};
+enum StreamType{USB, TCP, UDP, TCP_RAW};
 
 struct StreamConfig {
   bool prefix = false;                      // Send data with "data:" prefix
@@ -137,17 +130,25 @@ volatile long freqCalcStart;
 volatile long freqCalcNow;
 volatile long freq = 0;
 
-bool tcpConnected = false;
-WiFiClient tcpClient;
+// TCP clients and current connected state, each client is assigned a logger
+WiFiClient client[MAX_CLIENTS];
+bool clientConnected[MAX_CLIENTS] = {false};
+StreamLogger * streamLog[MAX_CLIENTS];
+
+// Strean client is for ffmpeg direct streaming
 WiFiClient streamClient;
+// tcp stuff is send over this client 
+WiFiClient * sendClient;
 // UDP used for streaming
 WiFiUDP udpClient;
 
+// Command stuff send over what ever
 char command[COMMAND_MAX_SIZE] = {'\0'};
 StaticJsonDocument<2*COMMAND_MAX_SIZE> docRcv;
 StaticJsonDocument<2*COMMAND_MAX_SIZE> docSend;
 String response = "";
 
+// Information about the current sampling period
 unsigned long samplingCountdown = 0;
 unsigned long startSamplingMillis = 0;
 unsigned long samplingDuration = 0;
@@ -155,9 +156,11 @@ unsigned long sentSamples = 0;
 volatile unsigned long packetNumber = 0;
 volatile unsigned long totalSamples = 0;
 
+// Some timer stuff s.t. things are updated regularly and not at full speed
 long lifenessUpdate = millis();
 long mdnsUpdate = millis();
-long wifiUpdate = millis();
+long tcpUpdate = millis();
+long rtcUpdate = millis();
 
 // HW Timer and mutex for sapmpling ISR
 hw_timer_t * timer = NULL;
@@ -178,10 +181,15 @@ volatile int sqwCounter = 0;
 
 volatile float values[4] = {0};
 
-#ifdef ARDUINO_ARCH_ESP32
-#include "esp32-hal-log.h"
-#endif
+// FPU register state
+uint32_t cp0_regs[18];
 
+
+// How can we change those parameters in Arduino, possible?
+// CONFIG_TCP_MSS=1436
+// CONFIG_TCP_MSL=60000
+// CONFIG_TCP_SND_BUF_DEFAULT=5744
+// CONFIG_TCP_WND_DEFAULT=5744
 
 /************************ SETUP *************************/
 void setup() {
@@ -199,11 +207,17 @@ void setup() {
   logger.addLogger(&spiffsLog);
   // Init all loggers
   logger.init();
+  // init the stream logger array
+  for (size_t i = 0; i < MAX_CLIENTS; i++) {
+    StreamLogger * theStreamLog = new StreamLogger(NULL, &timeStr, &LOG_PREFIX[0], INFO);
+    streamLog[i] = theStreamLog;
+  }
 
   if (!success) logger.log(ERROR, "Cannot init RTC");
   successAll &= success;
   relay.set(true);
-
+  // We do not need bluetooth, so disable it
+  esp_bt_controller_disable();
   pinMode(ERROR_LED, OUTPUT);
 
   // Indicate lifeness / reset
@@ -222,11 +236,9 @@ void setup() {
   success = ringBuffer.init();
   if (!success) logger.log(ERROR, "PSRAM init failed");
   successAll &= success;
-  // Try to use internal ram for buffering, but still indicate the missing ram
-  if (!success) {
-    success = ringBuffer.setSize(RAM_BUF_SIZE, false);
-    if (!success) logger.log(ERROR, "RAM init failed: %i bytes", RAM_BUF_SIZE);
-  }
+
+  // config.makeDefault();
+  // config.store();
 
   timer_init();
 
@@ -239,9 +251,9 @@ void setup() {
    // Indicate error if there is any
   digitalWrite(ERROR_LED, !successAll);
 
-  logger.log(ALL, "Connecting Network");
+  logger.log(ALL, "Connecting WLAN");
 
-  Network::init(&config, onNetworkConnect, onNetworkDisconnect);
+  Network::init(&config, onWifiConnect, onWifiDisconnect);
   setupOTA();
 
   response.reserve(2*COMMAND_MAX_SIZE);
@@ -254,7 +266,8 @@ void setup() {
 
   lifenessUpdate = millis();
   mdnsUpdate = millis();
-  wifiUpdate = millis();
+  tcpUpdate = millis();
+  rtcUpdate = millis();
 }
 
 // the loop routine runs over and over again forever:
@@ -267,6 +280,8 @@ void loop() {
   } else if (state == STATE_SAMPLE) {
     onSampling();
   }
+
+  onIdleOrSampling();
 
   // If we only have 200 ms before sampling should start, wait actively
   if (next_state != STATE_IDLE) {
@@ -285,15 +300,6 @@ void loop() {
     }
   }
 
-  // Handle serial requests
-  if (Serial.available()) {
-    handleEvent(Serial);
-  }
-  // Handle tcp requests
-  if (tcpClient.available() > 0) {
-    handleEvent(tcpClient);
-  }
-
   // Watchdog
   yield();
 }
@@ -304,9 +310,9 @@ char * timeStr() {
   return ttime;
 }
 
-void onNetworkConnect() {
-  logger.log(ALL, "Network Connected");
-  logger.log(ALL, "IP: %s", Network::localIP().toString().c_str());
+void onWifiConnect() {
+  logger.log(ALL, "Wifi Connected");
+  logger.log(ALL, "IP: %s", WiFi.localIP().toString().c_str());
   // The stuff todo if we have a network connection (and hopefully internet as well)
   if (Network::connected and not Network::apMode) {
     myTime.updateNTPTime();
@@ -318,22 +324,56 @@ void onNetworkConnect() {
   server.begin();
   streamServer.begin();
 
-  // udpNtp.begin(localNTPPort);
-  // getTimeNTP();
-
   // Reset lifeness and MDNS update
   lifenessUpdate = millis();
   mdnsUpdate = millis();
+  tcpUpdate = millis();
+  rtcUpdate = millis();
 }
 
-void onNetworkDisconnect() {
-  logger.log(ERROR, "Network Disconnected");
+void onWifiDisconnect() {
+  logger.log(ERROR, "Wifi Disconnected");
 
   if (state != STATE_IDLE) {
-    logger.log(ERROR, "Stop sampling (Network disconnect)");
+    logger.log(ERROR, "Stop sampling (Wifi disconnect)");
     stopSampling();
   }
 }
+
+void onIdleOrSampling() {
+
+  // Handle serial requests
+  if (Serial.available()) {
+    handleEvent(Serial);
+  }
+
+  // Handle tcp requests
+  for (size_t i = 0; i < MAX_CLIENTS; i++) {
+    if (client[i].available() > 0) {
+      handleEvent(client[i]);
+    }
+  }
+
+  // Handle tcp clients connections
+
+  if ((long)(millis() - tcpUpdate) >= 0) {
+    tcpUpdate += TCP_UPDATE_INTERVAL;
+    // Handle disconnect
+    for (size_t i = 0; i < MAX_CLIENTS; i++) {
+      if (clientConnected[i] and !client[i].connected()) {
+        onClientDisconnect(client[i], i);
+        clientConnected[i] = false;
+      }
+    }
+
+    // Handle connect
+    WiFiClient newClient = server.available();
+    if (newClient) {
+      onClientConnect(newClient);
+    }
+  }
+}
+
 
 void onIdle() {
   spiffsLog.flush();
@@ -343,38 +383,20 @@ void onIdle() {
   // Re-advertise MDNS service service every 30s 
   // TODO: no clue why, but does not work properly for esp32 (maybe it is the mac side)
   if ((long)(millis() - mdnsUpdate) >= 0) {
+    mdnsUpdate += MDNS_UPDATE_INTERVAL;
     // initMDNS();
     //MDNS.addService("_elec", "_tcp", STANDARD_TCP_STREAM_PORT);
-    mdnsUpdate += 30000;
   }
 
+  if ((long)(millis() - rtcUpdate) >= 0) {
+    rtcUpdate += RTC_UPDATE_INTERVAL;
+    if (rtc.connected) rtc.update();
+  }
+    
   // Update lifeness only on idle every second
   if ((long)(millis() - lifenessUpdate) >= 0) {
-    // if (rtc.connected) rtc.update();
-    lifenessUpdate += 1000;
+    lifenessUpdate += LIFENESS_UPDATE_INTERVAL;
     logger.log("");
-    // logger.log(ERROR, "test");
-    // logger.log(WARNING, "test");
-    // logger.log(DEBUG, "test");
-    // logger.log(ALL, "test");
-  }
-
-  // Handle tcp client connections
-  if (!tcpClient.connected()) {
-    if (tcpConnected) {
-      onClientDisconnect(tcpClient);
-      tcpConnected = false;
-    }
-    // Look for people connecting over the server
-    tcpClient = server.available();
-    if (tcpClient.connected()) {
-      // tcpClient.setNoDelay(true);
-      tcpConnected = true;
-      // Set new udp ip
-      streamConfig.ip = tcpClient.remoteIP();
-      streamConfig.port = tcpClient.remotePort();
-      onClientConnect(tcpClient);
-    }
   }
 
   // Look for people connecting over the stream server
@@ -389,21 +411,35 @@ void onIdle() {
       streamConfig.measures = STATE_VI;
       streamConfig.ip = streamClient.remoteIP();
       streamConfig.port = streamClient.remoteIP();
+      sendClient = &streamClient;
       startSampling();
     }
   }
 }
 
-void onClientConnect(WiFiClient &client) {
-  logger.log("Client with IP %s connected on port %u", client.remoteIP().toString().c_str(), client.remotePort());
-  streamLog._stream = (Stream*)&client;
-  logger.addLogger(&streamLog);
+void onClientConnect(WiFiClient &newClient) {
+  logger.log("Client with IP %s connected on port %u", newClient.remoteIP().toString().c_str(), newClient.remotePort());
+  
+  // Loop over all clients and look where we can store the pointer... 
+  for (size_t i = 0; i < MAX_CLIENTS; i++) {
+    if (!clientConnected[i]) {
+      client[i] = newClient;
+      // Set connected flag
+      clientConnected[i] = true;
+      streamLog[i]->_type = INFO; // This might be later reset
+      streamLog[i]->_stream = (Stream*)&client[i];
+      logger.addLogger(streamLog[i]);
+      return;
+    }
+  }
+  logger.log("To much clients, could not add client");
+  newClient.stop();
 }
 
-void onClientDisconnect(WiFiClient &client) {
-  logger.log("Client discconnected", client.remoteIP().toString().c_str());
-  logger.removeLogger(&streamLog);
-  streamLog._stream = NULL;
+void onClientDisconnect(WiFiClient &oldClient, int i) {
+  logger.log("Client discconnected %s port %u", oldClient.remoteIP().toString().c_str(), oldClient.remotePort());
+  logger.removeLogger(streamLog[i]);
+  streamLog[i]->_stream = NULL;
 }
 
 void onSampling() {
@@ -451,20 +487,20 @@ void onSampling() {
   // NOTE: Cannot detect disconnect for USB
   if (streamConfig.stream == USB) {
   } else if (streamConfig.stream == TCP) {
-    if (!tcpClient.connected()) {
+    if (!sendClient->connected()) {
       logger.log(ERROR, "TCP disconnected while streaming");
       stopSampling();
     }
   // Disconnect of UDP means disconnecting from tcp port
   } else if (streamConfig.stream == UDP) {
-    if (!tcpClient.connected()) {
+    if (!sendClient->connected()) {
       logger.log(ERROR, "TCP/UDP disconnected while streaming");
       stopSampling();
     }
   // Disconnect of raw stream means stop
   } else if (streamConfig.stream == TCP_RAW) {
     // Check for intended connection loss
-    if (!streamClient.connected()) {
+    if (!sendClient->connected()) {
       logger.log(INFO, "TCP Stream disconnected");
       stopSampling();
     }
@@ -479,9 +515,9 @@ void writeChunks(bool tail) {
       writeData(udpClient, streamConfig.chunkSize);
       udpClient.endPacket();
     } else if (streamConfig.stream == TCP) {
-      writeData(tcpClient, streamConfig.chunkSize);
+      writeData(*sendClient, streamConfig.chunkSize);
     } else if (streamConfig.stream == TCP_RAW) {
-      writeData(streamClient, streamConfig.chunkSize);
+      writeData(*sendClient, streamConfig.chunkSize);
     } else if (streamConfig.stream == USB) {
       writeData(Serial, streamConfig.chunkSize);
     }
@@ -492,9 +528,9 @@ void writeChunks(bool tail) {
       writeData(udpClient, ringBuffer.available());
       udpClient.endPacket();
     } else if (streamConfig.stream == TCP) {
-      writeData(tcpClient, ringBuffer.available());
+      writeData(*sendClient, ringBuffer.available());
     } else if (streamConfig.stream == TCP_RAW) {
-      writeData(streamClient, ringBuffer.available());
+      writeData(*sendClient, ringBuffer.available());
     } else if (streamConfig.stream == USB) {
       writeData(Serial, ringBuffer.available());
     }
@@ -523,26 +559,25 @@ void writeData(Stream &getter, uint16_t size) {
 }
 
 
-// Semaphore for communication between ISR and sample timer task 
-static SemaphoreHandle_t timer_sem = xSemaphoreCreateBinary();
-// volatile uint32_t mytime = micros();
+static SemaphoreHandle_t timer_sem;
+volatile uint32_t mytime = micros();
 
 void IRAM_ATTR sample_ISR() {
   static BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-  // mytime = micros();
+  //Serial.println("TIMERISR");
+  mytime = micros();
   xSemaphoreGiveFromISR(timer_sem, &xHigherPriorityTaskWoken);
-  if (xHigherPriorityTaskWoken) {
+  if ( xHigherPriorityTaskWoken) {
     portYIELD_FROM_ISR(); // this wakes up sample_timer_task immediately
   }
 }
 
-// Sample timer task inited once and in while loop is triggered from interrupt to sample one data point
 void IRAM_ATTR sample_timer_task(void *param) {
   timer_sem = xSemaphoreCreateBinary();
 
   float data[4] = { 0.0 };
 
-  // int test = 0;
+  int test = 0;
 
   while (state == STATE_SAMPLE) {
     xSemaphoreTake(timer_sem, portMAX_DELAY);
@@ -571,11 +606,9 @@ void IRAM_ATTR sample_timer_task(void *param) {
       stpm34.readAll(1, (float*) &data[0], (float*) &data[1], (float*) &data[2], (float*) &data[3]);
     }
 
-    bool success = ringBuffer.write((uint8_t*)&data[0], streamConfig.measurementBytes);
-    if (!success) logger.log(ERROR, "Overflow during ringBuffer write");
+    ringBuffer.write((uint8_t*)&data[0], streamConfig.measurementBytes);
 
   }
-  //  Task will delete itself here
   vTaskDelete( NULL );
 }
 
@@ -643,6 +676,15 @@ void setupOTA() {
   ArduinoOTA.begin();
 }
 
+void setBusyResponse() {
+  if (sendClient != NULL) {
+    response = "Device with IP: ";
+    response += sendClient->localIP().toString();
+    response += " currently sampling"; 
+  } else {
+    response = "Currently sampling";
+  }
+}
 // _____________________________________________________________________________
 
 /****************************************************
@@ -706,133 +748,143 @@ void handleJSON(Stream &getter) {
   /*********************** SAMPLING COMMAND ****************************/
   // e.g. {"cmd":{"name":"sample", "payload":{"type":"Serial", "rate":4000}}}
   if(strcmp(cmd, CMD_SAMPLE) == 0) {
-    // For sampling we need type payload and rate payload
-    const char* typeC = root["cmd"]["payload"]["type"];
-    const char* measuresC = root["cmd"]["payload"]["measures"];
-    int rate = docRcv["cmd"]["payload"]["rate"].as<int>();
-    unsigned long ts = docRcv["cmd"]["payload"]["time"].as<unsigned long>();
-    bool prefix = docRcv["cmd"]["payload"]["prefix"].as<bool>();
-    JsonVariant prefixVariant = root["cmd"]["payload"]["prefix"];
+    if (state == STATE_IDLE) {
+      // For sampling we need type payload and rate payload
+      const char* typeC = root["cmd"]["payload"]["type"];
+      const char* measuresC = root["cmd"]["payload"]["measures"];
+      int rate = docRcv["cmd"]["payload"]["rate"].as<int>();
+      unsigned long ts = docRcv["cmd"]["payload"]["time"].as<unsigned long>();
+      bool prefix = docRcv["cmd"]["payload"]["prefix"].as<bool>();
+      JsonVariant prefixVariant = root["cmd"]["payload"]["prefix"];
 
-    docSend["error"] = true;
-    if (typeC == nullptr or rate == 0) {
-      response = "Not a valid \"sample\" command";
-      if (typeC == nullptr) response += ", \"type\" missing";
-      if (rate == 0) response += ", \"rate\" missing";
-      docSend["msg"] = response;
-      return;
-    }
-    if (rate > 8000 || rate <= 0) {
-      response = "SamplingRate could not be set to ";
-      response += rate;
-      docSend["msg"] = response;
-      return;
-    }
-    if (measuresC == nullptr) {
-      streamConfig.measures = STATE_VI;
-      streamConfig.measurementBytes = 8;
-    } else if (strcmp(measuresC, "v,i") == 0) {
-      streamConfig.measures = STATE_VI;
-      streamConfig.measurementBytes = 8;
-    } else if (strcmp(measuresC, "p,q") == 0) {
-      streamConfig.measures = STATE_PQ;
-      streamConfig.measurementBytes = 8;
-    } else if (strcmp(measuresC, "v,i,p,q") == 0) {
-      streamConfig.measures = STATE_VIPQ;
-      streamConfig.measurementBytes = 16;
-    } else {
-      response = "Unsupported measures";
-      response += measuresC;
-      docSend["msg"] = response;
-      return;
-    }
-    streamConfig.prefix = true;
-    // If we do not want a prefix, we have to disable this if not at extra port
-    if (!prefixVariant.isNull()) {
-      streamConfig.prefix = prefix;
-    }
-    // e.g. {"cmd":{"name":"sample", "payload":{"type":"Serial", "rate":4000}}}
-    if (strcmp(typeC, "Serial") == 0) {
-      streamConfig.stream = USB;
-    // e.g. {"cmd":{"name":"sample", "payload":{"type":"TCP", "rate":4000}}}
-    } else if (strcmp(typeC, "TCP") == 0) {
-      streamConfig.stream = TCP;
-      streamConfig.port = STANDARD_TCP_SAMPLE_PORT;
-    // e.g. {"cmd":{"name":"sample", "payload":{"type":"UDP", "rate":4000}}}
-    } else if (strcmp(typeC, "UDP") == 0) {
-      streamConfig.stream = UDP;
-      int port = docRcv["cmd"]["payload"]["port"].as<int>();
-      if (port > 80000 || port <= 0) {
-        streamConfig.port = STANDARD_UDP_PORT;
-        response = "Unsupported UDP port";
-        response += port;
+      docSend["error"] = true;
+      if (typeC == nullptr or rate == 0) {
+        response = "Not a valid \"sample\" command";
+        if (typeC == nullptr) response += ", \"type\" missing";
+        if (rate == 0) response += ", \"rate\" missing";
         docSend["msg"] = response;
         return;
-      } else {
-        streamConfig.port = port;
       }
-      docSend["port"] = streamConfig.port;
-    } else if (strcmp(typeC, "FFMPEG") == 0) {
-
-      bool success = streamClient.connected();
-      if (!success) {
-        // Look for people connecting over the streaming server and connect them
-        streamClient = streamServer.available();
-        if (streamClient && streamClient.connected()) success = true;
-      }
-      if (success) {
-        response = F("Connected to TCP stream");
-      } else {
-        docSend["msg"] = F("Could not connect to TCP stream");
+      if (rate > 8000 || rate <= 0) {
+        response = "SamplingRate could not be set to ";
+        response += rate;
+        docSend["msg"] = response;
         return;
       }
-    } else {
-      response = F("Unsupported sampling type: ");
-      response += typeC;
-      docSend["msg"] = response;
-      return;
-    }
-    // Set global sampling variable
-    streamConfig.samplingRate = rate;
-    TIMER_CYCLES_FAST = (1000000) / streamConfig.samplingRate; // Cycles between HW timer inerrupts
-    calcChunkSize();
-
-
-    docSend["sampling_rate"] = streamConfig.samplingRate;
-    docSend["chunk_size"] = streamConfig.chunkSize;
-    docSend["conn_type"] = typeC;
-    docSend["prefix"] = streamConfig.prefix;
-    docSend["timer_cycles"] = TIMER_CYCLES_FAST;
-    docSend["cmd"] = CMD_SAMPLE;
-
-    relay.set(true);
-
-    next_state = STATE_SAMPLE;
-
-    if (ts != 0) {
-      response += F("Should sample at: ");
-      response += myTime.timeStr(ts, 0);
-      // Update ntp time actively wait for finish
-      myTime.updateNTPTime(true);
-      uint32_t delta = ts - myTime.utc_seconds();
-      uint32_t nowMs = millis();
-      delta *= 1000;
-      delta -= myTime.milliseconds();
-      if (delta > 20000 or delta < 500) {
-        response += F("//nCannot start sampling in: "); response += delta; response += F("ms");
-        streamConfig.countdown = 0;
+      if (measuresC == nullptr) {
+        streamConfig.measures = STATE_VI;
+        streamConfig.measurementBytes = 8;
+      } else if (strcmp(measuresC, "v,i") == 0) {
+        streamConfig.measures = STATE_VI;
+        streamConfig.measurementBytes = 8;
+      } else if (strcmp(measuresC, "p,q") == 0) {
+        streamConfig.measures = STATE_PQ;
+        streamConfig.measurementBytes = 8;
+      } else if (strcmp(measuresC, "v,i,p,q") == 0) {
+        streamConfig.measures = STATE_VIPQ;
+        streamConfig.measurementBytes = 16;
       } else {
-        response += F("//nStart sampling in: "); response += delta; response += F("ms");
-        streamConfig.countdown = nowMs + delta;
-        docSend["error"] = false;
+        response = "Unsupported measures";
+        response += measuresC;
+        docSend["msg"] = response;
+        return;
       }
-      docSend["msg"] = String(response);
-      return;
+      streamConfig.prefix = true;
+      // If we do not want a prefix, we have to disable this if not at extra port
+      if (!prefixVariant.isNull()) {
+        streamConfig.prefix = prefix;
+      }
+      // e.g. {"cmd":{"name":"sample", "payload":{"type":"Serial", "rate":4000}}}
+      if (strcmp(typeC, "Serial") == 0) {
+        streamConfig.stream = USB;
+      // e.g. {"cmd":{"name":"sample", "payload":{"type":"TCP", "rate":4000}}}
+      } else if (strcmp(typeC, "TCP") == 0) {
+        sendClient = (WiFiClient*)&getter; 
+        streamConfig.stream = TCP;
+        streamConfig.port = STANDARD_TCP_SAMPLE_PORT;
+        streamConfig.ip = sendClient->remoteIP();
+      // e.g. {"cmd":{"name":"sample", "payload":{"type":"UDP", "rate":4000}}}
+      } else if (strcmp(typeC, "UDP") == 0) {
+        streamConfig.stream = UDP;
+        int port = docRcv["cmd"]["payload"]["port"].as<int>();
+        if (port > 80000 || port <= 0) {
+          streamConfig.port = STANDARD_UDP_PORT;
+          response = "Unsupported UDP port";
+          response += port;
+          docSend["msg"] = response;
+          return;
+        } else {
+          streamConfig.port = port;
+        }
+        sendClient = (WiFiClient*)&getter;
+        docSend["port"] = streamConfig.port;
+        streamConfig.ip = sendClient->remoteIP();
+      } else if (strcmp(typeC, "FFMPEG") == 0) {
+
+        bool success = streamClient.connected();
+        if (!success) {
+          // Look for people connecting over the streaming server and connect them
+          streamClient = streamServer.available();
+          if (streamClient && streamClient.connected()) success = true;
+        }
+        if (success) {
+          response = F("Connected to TCP stream");
+        } else {
+          docSend["msg"] = F("Could not connect to TCP stream");
+          return;
+        }
+      } else {
+        response = F("Unsupported sampling type: ");
+        response += typeC;
+        docSend["msg"] = response;
+        return;
+      }
+      // Set global sampling variable
+      streamConfig.samplingRate = rate;
+      TIMER_CYCLES_FAST = (1000000) / streamConfig.samplingRate; // Cycles between HW timer inerrupts
+      calcChunkSize();
+
+
+      docSend["sampling_rate"] = streamConfig.samplingRate;
+      docSend["chunk_size"] = streamConfig.chunkSize;
+      docSend["conn_type"] = typeC;
+      docSend["prefix"] = streamConfig.prefix;
+      docSend["timer_cycles"] = TIMER_CYCLES_FAST;
+      docSend["cmd"] = CMD_SAMPLE;
+
+      relay.set(true);
+
+      next_state = STATE_SAMPLE;
+
+      if (ts != 0) {
+        response += F("Should sample at: ");
+        response += myTime.timeStr(ts, 0);
+        // Update ntp time actively wait for finish
+        myTime.updateNTPTime(true);
+        uint32_t delta = ts - myTime.utc_seconds();
+        uint32_t nowMs = millis();
+        delta *= 1000;
+        delta -= myTime.milliseconds();
+        if (delta > 20000 or delta < 500) {
+          response += F("//nCannot start sampling in: "); response += delta; response += F("ms");
+          streamConfig.countdown = 0;
+        } else {
+          response += F("//nStart sampling in: "); response += delta; response += F("ms");
+          streamConfig.countdown = nowMs + delta;
+          docSend["error"] = false;
+        }
+        docSend["msg"] = String(response);
+        return;
+      }
+      docSend["error"] = false;
+      state = next_state;
+      // UDP packets are not allowed to exceed 1500 bytes, so keep size reasonable
+      startSampling(true);
+    } else {
+      setBusyResponse();
+      docSend["msg"] = response;
+      docSend["state"] = "busy";
     }
-    docSend["error"] = false;
-    state = next_state;
-    // UDP packets are not allowed to exceed 1500 bytes, so keep size reasonable
-    startSampling(true);
   }
 
   /*********************** SWITCHING COMMAND ****************************/
@@ -866,7 +918,7 @@ void handleJSON(Stream &getter) {
     docSend["sample_duration"] = samplingDuration;
     docSend["samples"] = totalSamples;
     docSend["sent_samples"] = sentSamples;
-    docSend["ip"] = Network::localIP().toString();
+    docSend["ip"] = WiFi.localIP().toString();
     docSend["avg_rate"] = totalSamples/(samplingDuration/1000.0);
     docSend["cmd"] = CMD_STOP;
   }
@@ -888,7 +940,7 @@ void handleJSON(Stream &getter) {
   // e.g. {"cmd":{"name":"info"}}
   else if (strcmp(cmd, CMD_INFO) == 0) {
     docSend["cmd"] = "info";
-    docSend["msg"] = F("WIFI powermeter");
+    docSend["type"] = F("powermeter");
     docSend["version"] = VERSION;
     String compiled = __DATE__;
     compiled += " ";
@@ -896,11 +948,12 @@ void handleJSON(Stream &getter) {
     docSend["compiled"] = compiled;
     docSend["sys_time"] = myTime.timeStr();
     docSend["name"] = config.name;
-    docSend["ip"] = Network::localIP().toString();
+    docSend["ip"] = WiFi.localIP().toString();
     docSend["sampling_rate"] = streamConfig.samplingRate;
     docSend["buffer_size"] = ringBuffer.getSize();
     docSend["psram"] = ringBuffer.inPSRAM();
     docSend["rtc"] = rtc.connected;
+    docSend["state"] = state != STATE_IDLE ? "busy" : "idle";
     String ssids = "[";
     for (int i = 0; i < config.numAPs; i++) {
       ssids += config.wifiSSIDs[i];
@@ -913,111 +966,129 @@ void handleJSON(Stream &getter) {
   /*********************** MDNS COMMAND ****************************/
   // e.g. {"cmd":{"name":"mdns", "payload":{"name":"newName"}}}
   else if (strcmp(cmd, CMD_MDNS) == 0) {
-    docSend["error"] = true;
-    const char* newName = docRcv["cmd"]["payload"]["name"];
-    if (newName == nullptr) {
-      docSend["msg"] = F("MDNS name required in payload with key name");
-      return;
-    }
-    if (strlen(newName) < MAX_NAME_LEN) {
-      config.setName((char * )newName);
-    } else {
-      response = F("MDNS name too long, only string of size ");
-      response += MAX_NAME_LEN;
-      response += F(" allowed");
+    if (state == STATE_IDLE) {
+      docSend["error"] = true;
+      const char* newName = docRcv["cmd"]["payload"]["name"];
+      if (newName == nullptr) {
+        docSend["msg"] = F("MDNS name required in payload with key name");
+        return;
+      }
+      if (strlen(newName) < MAX_NAME_LEN) {
+        config.setName((char * )newName);
+      } else {
+        response = F("MDNS name too long, only string of size ");
+        response += MAX_NAME_LEN;
+        response += F(" allowed");
+        docSend["msg"] = response;
+        return;
+      }
+      char * name = config.name;
+      response = F("Set MDNS name to: ");
+      response += name;
+      //docSend["msg"] = sprintf( %s", name);
       docSend["msg"] = response;
-      return;
+      docSend["mdns_name"] = name;
+      docSend["error"] = false;
+      initMDNS();
+    } else {
+      setBusyResponse();
+      docSend["msg"] = response;
+      docSend["state"] = "busy";
     }
-    char * name = config.name;
-    response = F("Set MDNS name to: ");
-    response += name;
-    //docSend["msg"] = sprintf( %s", name);
-    docSend["msg"] = response;
-    docSend["mdns_name"] = name;
-    docSend["error"] = false;
-    initMDNS();
   }
   /*********************** ADD WIFI COMMAND ****************************/
   // e.g. {"cmd":{"name":"addWifi", "payload":{"ssid":"ssidName","pwd":"pwdName"}}}
   else if (strcmp(cmd, CMD_ADD_WIFI) == 0) {
-    docSend["error"] = true;
-    const char* newSSID = docRcv["cmd"]["payload"]["ssid"];
-    const char* newPWD = docRcv["cmd"]["payload"]["pwd"];
-    if (newSSID == nullptr or newPWD == nullptr) {
-      docSend["msg"] = F("WiFi SSID and PWD required, for open networks, fill empty pwd");
-      return;
-    }
-    bool success = false;
-    if (strlen(newSSID) < MAX_SSID_LEN and strlen(newPWD) < MAX_PWD_LEN) {
-      success = config.addWiFi((char * )newSSID, (char * )newPWD);
-    } else {
-      response = F("SSID or PWD too long, max: ");
-      response += MAX_SSID_LEN;
-      response += F(", ");
-      response += MAX_PWD_LEN;
-      docSend["msg"] = response;
-      return;
-    }
-    if (success)  {
-      char * name = config.wifiSSIDs[config.numAPs-1];
-      char * pwd = config.wifiPWDs[config.numAPs-1];
-      response = F("New Ap, SSID: ");
-      response += name;
-      response += F(", PW: ");
-      response += pwd;
-      //docSend["msg"] = sprintf( %s", name);
-      docSend["ssid"] = name;
-      docSend["pwd"] = pwd;
-      docSend["error"] = false;
-    } else {
-      response = F("MAX # APs reached, need to delete first");
-    }
+    if (state == STATE_IDLE) {
+      docSend["error"] = true;
+      const char* newSSID = docRcv["cmd"]["payload"]["ssid"];
+      const char* newPWD = docRcv["cmd"]["payload"]["pwd"];
+      if (newSSID == nullptr or newPWD == nullptr) {
+        docSend["msg"] = F("WiFi SSID and PWD required, for open networks, fill empty pwd");
+        return;
+      }
+      bool success = false;
+      if (strlen(newSSID) < MAX_SSID_LEN and strlen(newPWD) < MAX_PWD_LEN) {
+        success = config.addWiFi((char * )newSSID, (char * )newPWD);
+      } else {
+        response = F("SSID or PWD too long, max: ");
+        response += MAX_SSID_LEN;
+        response += F(", ");
+        response += MAX_PWD_LEN;
+        docSend["msg"] = response;
+        return;
+      }
+      if (success)  {
+        char * name = config.wifiSSIDs[config.numAPs-1];
+        char * pwd = config.wifiPWDs[config.numAPs-1];
+        response = F("New Ap, SSID: ");
+        response += name;
+        response += F(", PW: ");
+        response += pwd;
+        //docSend["msg"] = sprintf( %s", name);
+        docSend["ssid"] = name;
+        docSend["pwd"] = pwd;
+        docSend["error"] = false;
+      } else {
+        response = F("MAX # APs reached, need to delete first");
+      }
 
-    docSend["msg"] = response;
-    String ssids = "[";
-    for (int i = 0; i < config.numAPs; i++) {
-      ssids += config.wifiSSIDs[i];
-      ssids += ", ";
+      docSend["msg"] = response;
+      String ssids = "[";
+      for (int i = 0; i < config.numAPs; i++) {
+        ssids += config.wifiSSIDs[i];
+        ssids += ", ";
+      }
+      ssids += "]";
+      docSend["ssids"] = ssids;
+    } else {
+      setBusyResponse();
+      docSend["msg"] = response;
+      docSend["state"] = "busy";
     }
-    ssids += "]";
-    docSend["ssids"] = ssids;
   }
 
   /*********************** DEl WIFI COMMAND ****************************/
   // e.g. {"cmd":{"name":"delWifi", "payload":{"ssid":"ssidName"}}}
   else if (strcmp(cmd, CMD_REMOVE_WIFI) == 0) {
-    docSend["error"] = true;
-    const char* newSSID = docRcv["cmd"]["payload"]["ssid"];
-    if (newSSID == nullptr) {
-      docSend["msg"] = F("Required SSID to remove");
-      return;
-    }
-    bool success = false;
-    if (strlen(newSSID) < MAX_SSID_LEN) {
-      success = config.removeWiFi((char * )newSSID);
-    } else {
-      response = F("SSID too long, max: ");
-      response += MAX_SSID_LEN;
+    if (state == STATE_IDLE) {
+      docSend["error"] = true;
+      const char* newSSID = docRcv["cmd"]["payload"]["ssid"];
+      if (newSSID == nullptr) {
+        docSend["msg"] = F("Required SSID to remove");
+        return;
+      }
+      bool success = false;
+      if (strlen(newSSID) < MAX_SSID_LEN) {
+        success = config.removeWiFi((char * )newSSID);
+      } else {
+        response = F("SSID too long, max: ");
+        response += MAX_SSID_LEN;
+        docSend["msg"] = response;
+        return;
+      }
+      if (success)  {
+        response = F("Removed SSID: ");
+        response += newSSID;
+        docSend["error"] = false;
+      } else {
+        response = F("SSID ");
+        response += newSSID;
+        response += F(" not found");
+      }
       docSend["msg"] = response;
-      return;
-    }
-    if (success)  {
-      response = F("Removed SSID: ");
-      response += newSSID;
-      docSend["error"] = false;
+      String ssids = "[";
+      for (int i = 0; i < config.numAPs; i++) {
+        ssids += config.wifiSSIDs[i];
+        ssids += ", ";
+      }
+      ssids += "]";
+      docSend["ssids"] = ssids;
     } else {
-      response = F("SSID ");
-      response += newSSID;
-      response += F(" not found");
+      setBusyResponse();
+      docSend["msg"] = response;
+      docSend["state"] = "busy";
     }
-    docSend["msg"] = response;
-    String ssids = "[";
-    for (int i = 0; i < config.numAPs; i++) {
-      ssids += config.wifiSSIDs[i];
-      ssids += ", ";
-    }
-    ssids += "]";
-    docSend["ssids"] = ssids;
   }
 
   /*********************** NTP COMMAND ****************************/
@@ -1037,32 +1108,35 @@ void handleJSON(Stream &getter) {
   /*********************** Clear Log COMMAND ****************************/
   // e.g. {"cmd":{"name":"clearLog"}}
   else if (strcmp(cmd, CMD_CLEAR_LOG) == 0) {
-    docSend["error"] = false;
-    spiffsLog.clear();
+    if (state == STATE_IDLE) {
+      docSend["error"] = false;
+      spiffsLog.clear();
+    } else {
+      setBusyResponse();
+      docSend["msg"] = response;
+      docSend["state"] = "busy";
+    }
   }
 
   /*********************** Get Log COMMAND ****************************/
   // e.g. {"cmd":{"name":"getLog"}}
   else if (strcmp(cmd, CMD_GET_LOG) == 0) {
-    spiffsLog.flush();
-    docSend["error"] = false;
-    bool hasRow = spiffsLog.nextRow(&command[0]);
-    getter.printf("%s{\"cmd\":\"log\",\"msg\":\"", &LOG_PREFIX[0]);
-    getter.printf("*** LOGFile *** //n");
-    while(hasRow) {
-      getter.printf("%s//n", &command[0]);
-      hasRow = spiffsLog.nextRow(&command[0]);
+    if (state == STATE_IDLE) {
+      spiffsLog.flush();
+      docSend["error"] = false;
+      bool hasRow = spiffsLog.nextRow(&command[0]);
+      getter.printf("%s{\"cmd\":\"log\",\"msg\":\"", &LOG_PREFIX[0]);
+      getter.printf("*** LOGFile *** //n");
+      while(hasRow) {
+        getter.printf("%s//n", &command[0]);
+        hasRow = spiffsLog.nextRow(&command[0]);
+      }
+      getter.println("*** LOGFile *** \"}");
+    } else {
+      setBusyResponse();
+      docSend["msg"] = response;
+      docSend["state"] = "busy";
     }
-    getter.println("*** LOGFile *** \"}");
-    
-    /*
-    getter.printf("%s *** LOGFile *** //n", &LOG_PREFIX[0]);
-    while(hasRow) {
-      getter.printf("%s%s\n", &LOG_PREFIX[0], &command[0]);
-      hasRow = spiffsLog.nextRow(&command[0]);
-    }
-    getter.printf("%s *** LOGFile *** \n", &LOG_PREFIX[0]);
-    */
   }
 }
 
