@@ -17,10 +17,12 @@ Logger::Logger(char * (*timeStrGetter)(void), const char * prefix, LogType type)
   _type = type;
   _prefix = prefix;
   _timeStrGetter = timeStrGetter;
+  loggerType = ABSTRACT_LOGGER;
 }
 // ********************************* STREAM LOGGER ************************************* //
 StreamLogger::StreamLogger(Stream * stream, char * (*timeStrGetter)(void), const char * prefix, LogType type):Logger(timeStrGetter, prefix, type) {
   _stream = stream;
+  loggerType = STREAM_LOGGER;
 }
 void StreamLogger::write(const char * str) {
   _stream->write(str);
@@ -36,7 +38,7 @@ bool StreamLogger::init() {
 }
 
 
- #define DEBUG_SPIFFS_LOGGER
+//  #define DEBUG_SPIFFS_LOGGER
 // ********************************* SPIFFS LOGGER ************************************* //
 SPIFFSLogger::SPIFFSLogger(bool autoFlush, const char * fileName, char * (*timeStrGetter)(void), 
                            const char * prefix, LogType type, int32_t maxFileSize):Logger(timeStrGetter, prefix, type) {
@@ -49,6 +51,7 @@ SPIFFSLogger::SPIFFSLogger(bool autoFlush, const char * fileName, char * (*timeS
   _bufferIndex = 0;
   _autoFlush = autoFlush;
   _mutex = xSemaphoreCreateMutex();
+  loggerType = SPIFFS_LOGGER;
   // Init buffers
   for (int i = 0; i < BUFFERS; i++) buffer[i][0] = '\0';
 }
@@ -517,6 +520,7 @@ void MultiLogger::log(const char* _log, ...) {
 
     const char * typeStr = LOG_TYPE_TEXT[_currentLog];
     // const char * typeStr = _logTypeToStr(_currentLog);
+
     for (int i = 0; i < MAX_LOG_STREAMS; i++) {
       if (loggers[i] != NULL && (uint8_t)loggers[i]->_type <= (uint8_t)_currentLog) {
         sprintf(_aLLStr, "%s%s%s: %s\r\n", loggers[i]->_prefix, typeStr, timeStr, _logText);

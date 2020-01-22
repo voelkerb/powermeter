@@ -19,7 +19,7 @@
 #include "SPIFFS.h"
 #include <rom/rtc.h>
 
-#define MAX_LOG_STREAMS 3
+#define MAX_LOG_STREAMS 5
 #define MAX_LOG_TEXT_LENGTH 256
 #define MAX_TIME_TEXT_LENGTH 30
 #define MAX_TYPE_TEXT_LENGTH 10
@@ -62,6 +62,7 @@ static const char * const MY_RESET_REASON_TXT[] = {
 
 
 enum LogType{ALL, DEBUG, INFO, WARNING, ERROR};
+enum LoggerType{ABSTRACT_LOGGER, STREAM_LOGGER, SPIFFS_LOGGER};
 
 // abstract 
 class Logger {
@@ -71,7 +72,7 @@ class Logger {
     virtual void write(char * str);
     virtual void flush();
     virtual bool init();
-
+    LoggerType loggerType;
     LogType _type;
     const char * _prefix;
     char * (*_timeStrGetter)(void);
@@ -164,6 +165,7 @@ class MultiLogger {
     void append(const char* _log, ...);
     void append(char* _log, ...);
 
+    Logger * loggers[MAX_LOG_STREAMS];
   private:
     MultiLogger();
     MultiLogger(const MultiLogger &);             // Prevent copy constructor
@@ -172,7 +174,6 @@ class MultiLogger {
     const char* _reset_reason(RESET_REASON reason);
     const char* _logTypeToStr(LogType type);
     SemaphoreHandle_t w_mutex; // During write, we are not allowed to add or remove streams from the logger class
-    Logger * loggers[MAX_LOG_STREAMS];
     
 	  char _logText[MAX_TEXT_LENGTH];
 	  char _aLLStr[MAX_TEXT_LENGTH];

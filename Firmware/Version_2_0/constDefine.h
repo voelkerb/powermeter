@@ -1,8 +1,8 @@
 
 
 // Serial Speed and DEBUG option
-#define SERIAL_SPEED 9600
-// #define SERIAL_SPEED 2000000
+// #define SERIAL_SPEED 9600
+#define SERIAL_SPEED 2000000
 // #define DEBUG_DEEP
 #define SENT_LIFENESS_TO_CLIENTS
 
@@ -19,6 +19,13 @@
 // Location time difference between us (Freiburg, Germany) and NTP time 
 #define LOCATION_TIME_OFFSET 3600//7200 // 2 hours or (2*60*60)
 
+#define MDNS_UPDATE_INTERVAL 30000
+#define TCP_UPDATE_INTERVAL 100
+#define LIFENESS_UPDATE_INTERVAL 1000
+#define RTC_UPDATE_INTERVAL 30000
+
+// We allow a max of 3 tcp clients for performance reasons
+#define MAX_CLIENTS 3
 
 const char * LOG_FILE = "/log.txt";
 
