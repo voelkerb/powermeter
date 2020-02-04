@@ -7,7 +7,7 @@
 #define SENT_LIFENESS_TO_CLIENTS
 
 
-#define VERSION "2.1"
+#define VERSION "1.2"
 
 // Default values
 #define STANDARD_UDP_PORT 54323
@@ -23,7 +23,6 @@
 #define MDNS_UPDATE_INTERVAL 30000
 #define TCP_UPDATE_INTERVAL 100
 #define LIFENESS_UPDATE_INTERVAL 1000
-#define RTC_UPDATE_INTERVAL 30000
 
 // We allow a max of 3 tcp clients for performance reasons
 #define MAX_CLIENTS 3
@@ -37,28 +36,24 @@ const char LOG_PREFIX[] = "Info:";
 
 // Pin definitions
 // Red error led for first flash
-const int ERROR_LED = 13;
+const int ERROR_LED = 0;
+// const int ERROR_LED = LED_BUILTIN;
 
 // Pins for STPM34 SPI Connection
-const int STPM_CS = 5;
-const int STPM_SYN = 14;
+const int STPM_CS = 15;
+const int STPM_SYN = 4;
 // Reset pin of STPM
-const int STPM_RES = 12;
+const int STPM_RES = 5;
 
-// Pins for 230V Relay
-const int RELAY_PIN_S = 26;
-const int RELAY_PIN_R = 27;
+// Pin for 230V Relay
+const int RELAY_PIN_S = 2;
 
-// Pins for RTC conenction
-const int RTC_INT = 25;
-const int RTC_32k = 35;
-const int RTC_RST = 32;
 
 
 // Buffering stuff
 #define MAX_SEND_SIZE 512 // 1024
 // PSRAM Buffer
-const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
+const int BUF_SIZE = (10*1024);
 #define COMMAND_MAX_SIZE 500
 
 // Communication commands

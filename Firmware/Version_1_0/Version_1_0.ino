@@ -158,7 +158,7 @@ volatile unsigned long totalSamples = 0;
 long lifenessUpdate = millis();
 long mdnsUpdate = millis();
 
-
+bool updating = false;
 
 // const char* host = "esp8266-webupdate";
 // const char* update_path = "/firmware";
@@ -231,6 +231,7 @@ void setup() {
 
 // the loop routine runs over and over again forever:
 void loop() {
+
   if (WiFi.status() != WL_CONNECTED) {
     connectNetwork();
     lifenessUpdate = millis();

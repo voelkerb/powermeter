@@ -307,6 +307,12 @@ def parser(unparsed_args):
     action = "store_true",
     default = False
   )
+  group.add_option("-r", "--percent",
+    dest = "percent",
+    help = "Show percent output. Does not work for ArduinoIDE",
+    action = "store_true",
+    default = False
+  )
   group.add_option("-t", "--timeout",
     dest = "timeout",
     type = "int",

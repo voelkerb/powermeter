@@ -13,6 +13,7 @@
 #include <esp_bt.h>
 #include <esp32-hal-cpu.h>
 #include <rom/rtc.h>
+#include <PubSubClient.h>
 
 #include "constDefine.h"
 #include "src/logger/logger.h"
@@ -108,7 +109,7 @@ SampleState next_state = STATE_IDLE;
 
 // Available measures are VOLTAGE+CURRENT, ACTIVE+REACTIVE Power or both
 enum Measures{STATE_VI, STATE_PQ, STATE_VIPQ};
-enum StreamType{USB, TCP, UDP, TCP_RAW};
+enum StreamType{USB, TCP, UDP, TCP_RAW, MQTT};
 
 struct StreamConfig {
   bool prefix = false;                      // Send data with "data:" prefix
@@ -138,6 +139,7 @@ StreamLogger * streamLog[MAX_CLIENTS];
 // Strean client is for ffmpeg direct streaming
 WiFiClient streamClient;
 // tcp stuff is send over this client 
+Stream * newGetter;
 WiFiClient * sendClient;
 // UDP used for streaming
 WiFiUDP udpClient;
@@ -161,6 +163,7 @@ long lifenessUpdate = millis();
 long mdnsUpdate = millis();
 long tcpUpdate = millis();
 long rtcUpdate = millis();
+long mqttUpdate = millis();
 
 // HW Timer and mutex for sapmpling ISR
 hw_timer_t * timer = NULL;
@@ -184,12 +187,21 @@ volatile float values[4] = {0};
 // FPU register state
 uint32_t cp0_regs[18];
 
+// OTA Update in progress
+bool updating = false;
 
 // How can we change those parameters in Arduino, possible?
 // CONFIG_TCP_MSS=1436
 // CONFIG_TCP_MSL=60000
 // CONFIG_TCP_SND_BUF_DEFAULT=5744
 // CONFIG_TCP_WND_DEFAULT=5744
+
+char mqttTopicPubSwitch[MAX_MQTT_PUB_TOPIC_SWITCH+MAX_NAME_LEN] = {'\0'};
+char mqttTopicPubSample[MAX_MQTT_PUB_TOPIC_SAMPLE+MAX_NAME_LEN] = {'\0'};
+char mqttTopicPubInfo[MAX_MQTT_PUB_TOPIC_INFO+MAX_NAME_LEN] = {'\0'};
+bool mqttConnected = false;
+WiFiClient mqtt_client;
+PubSubClient mqttClient(mqtt_client);
 
 /************************ SETUP *************************/
 void setup() {
@@ -216,6 +228,8 @@ void setup() {
   if (!success) logger.log(ERROR, "Cannot init RTC");
   successAll &= success;
   relay.set(true);
+  relay.setCallback(relayCB);
+  
   // We do not need bluetooth, so disable it
   esp_bt_controller_disable();
   pinMode(ERROR_LED, OUTPUT);
@@ -268,10 +282,12 @@ void setup() {
   mdnsUpdate = millis();
   tcpUpdate = millis();
   rtcUpdate = millis();
+  mqttUpdate = millis();
 }
 
 // the loop routine runs over and over again forever:
 void loop() {
+  if (updating) return;
 
   // Stuff done on idle
   if (state == STATE_IDLE) {
@@ -329,6 +345,7 @@ void onWifiConnect() {
   mdnsUpdate = millis();
   tcpUpdate = millis();
   rtcUpdate = millis();
+  mqttUpdate = millis();
 }
 
 void onWifiDisconnect() {
@@ -341,6 +358,9 @@ void onWifiDisconnect() {
 }
 
 void onIdleOrSampling() {
+
+  // MQTT loop
+  mqttClient.loop();
 
   // Handle serial requests
   if (Serial.available()) {
@@ -387,6 +407,19 @@ void onIdle() {
     // initMDNS();
     //MDNS.addService("_elec", "_tcp", STANDARD_TCP_STREAM_PORT);
   }
+  // MQTT stuff, check connection status, on disconnect, try reconnect
+  // TODO: no clue why, but does not work properly for esp32 (maybe it is the mac side)
+  if ((long)(millis() - mqttUpdate) >= 0) {
+    mqttUpdate += MQTT_UPDATE_INTERVAL;
+
+    if (mqttConnected and !mqttClient.connected()) {
+      logger.log(WARNING, "Disconnected from MQTT server");
+      mqttConnected = false;
+    }
+    if (!mqttConnected) {
+      initMQTT();
+    }
+  }
 
   if ((long)(millis() - rtcUpdate) >= 0) {
     rtcUpdate += RTC_UPDATE_INTERVAL;
@@ -410,7 +443,7 @@ void onIdle() {
       streamConfig.samplingRate = DEFAULT_SR;
       streamConfig.measures = STATE_VI;
       streamConfig.ip = streamClient.remoteIP();
-      streamConfig.port = streamClient.remoteIP();
+      streamConfig.port = STANDARD_TCP_SAMPLE_PORT;
       sendClient = &streamClient;
       startSampling();
     }
@@ -436,7 +469,7 @@ void onClientConnect(WiFiClient &newClient) {
   newClient.stop();
 }
 
-void onClientDisconnect(WiFiClient &oldClient, int i) {
+void onClientDisconnect(WiFiClient &oldClient, size_t i) {
   logger.log("Client discconnected %s port %u", oldClient.remoteIP().toString().c_str(), oldClient.remotePort());
   logger.removeLogger(streamLog[i]);
   streamLog[i]->_stream = NULL;
@@ -520,6 +553,8 @@ void writeChunks(bool tail) {
       writeData(*sendClient, streamConfig.chunkSize);
     } else if (streamConfig.stream == USB) {
       writeData(Serial, streamConfig.chunkSize);
+    } else if (streamConfig.stream == MQTT) {
+      writeDataMQTT(streamConfig.chunkSize);
     }
   }
   if (tail) {
@@ -536,7 +571,14 @@ void writeChunks(bool tail) {
     }
   }
 }
-
+void writeDataMQTT(uint16_t size) {
+  if (size <= 0) return;
+  size_t i = 0;
+  while (i < size) { 
+    i++;
+  }
+  
+}
 // Data prefix 
 const char data_id[5] = {'D','a','t','a',':'};
 void writeData(Stream &getter, uint16_t size) {
@@ -645,15 +687,32 @@ void setupOTA() {
   ArduinoOTA.setPassword("energy"); 
   // Password can be set with it's md5 value as well
   // MD5(admin) = 21232f297a57a5a743894a0e4a801fc3
-  // ArduinoOTA.setPasswordHash("21232f297a57a5a743894a0e4a801fc3");
+  // ArduinoOTA.setPasswordHash(2"21232f297a57a5a743894a0e4a801fc3");
 
   ArduinoOTA.onStart([]() {
+    updating = true;
     logger.log("Start updating");
-    // free(buffer);
+
+    // Disconnecting all connected clients
+    for (size_t i = 0; i < MAX_CLIENTS; i++) {
+      if (clientConnected[i]) {
+        onClientDisconnect(client[i], i);
+        clientConnected[i] = false;
+      }
+    }
+    if (streamClient.connected()) streamClient.stop();
+    
+    // Stopping all other tcp stuff
+    streamServer.stop();
+    streamServer.close();
+    server.stop();
+    server.close();
   });
+
   ArduinoOTA.onEnd([]() {
     logger.log("End");
   });
+
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
     unsigned int percent = (progress / (total / 100));
     if (percent != oldPercent) {
@@ -661,6 +720,7 @@ void setupOTA() {
       oldPercent = percent;
     }
   });
+  
   ArduinoOTA.onError([](ota_error_t error) {
     logger.append("Error[%u]: ", error);
     if (error == OTA_AUTH_ERROR) logger.append("Auth Failed");
@@ -702,24 +762,13 @@ void handleEvent(Stream &getter) {
   logger.log(INFO, command);
   #endif
 
-  // Deserialize the JSON document
-  DeserializationError error = deserializeJson(docRcv, command);
-  // Test if parsing succeeds.
-  if (error) {
-    // Remove all unallowed json characters to prevent error 
-    uint32_t len = strlen(command);
-    if (len > 10) len = 10;
-    for (int i = 0; i < len; i++) {
-      if (command[i] == '\r' || command[i] == '\n' || command[i] == '"' || command[i] == '}' || command[i] == '{') command[i] = '_';
-    }
-    logger.log(ERROR, "deserializeJson() failed: %.10s", &command[0]);
-    return;
-  }
-  //docSend.clear();
-  JsonObject obj = docSend.to<JsonObject>();
-  obj.clear();
+  newGetter = (Stream*)&getter;
+
   response = "";
-  handleJSON(getter);
+
+  parseCommand();
+  handleJSON();
+
   if (docSend.isNull() == false) {
     getter.flush();
     response = "";
@@ -733,7 +782,27 @@ void handleEvent(Stream &getter) {
   command[0] = '\0';
 }
 
-void handleJSON(Stream &getter) {
+void parseCommand() {
+  // Deserialize the JSON document
+  DeserializationError error = deserializeJson(docRcv, command);
+  
+  // Test if parsing succeeds.
+  if (error) {
+    // Remove all unallowed json characters to prevent error 
+    uint32_t len = strlen(command);
+    if (len > 10) len = 10;
+    for (size_t i = 0; i < len; i++) {
+      if (command[i] == '\r' || command[i] == '\n' || command[i] == '"' || command[i] == '}' || command[i] == '{') command[i] = '_';
+    }
+    logger.log(ERROR, "deserializeJson() failed: %.10s", &command[0]);
+    return;
+  }
+  //docSend.clear();
+  JsonObject obj = docSend.to<JsonObject>();
+  obj.clear();
+}
+
+void handleJSON() {
   // All commands look like the following:
   // {"cmd":{"name":"commandName", "payload":{<possible data>}}}
   // e.g. mdns
@@ -798,8 +867,11 @@ void handleJSON(Stream &getter) {
       if (strcmp(typeC, "Serial") == 0) {
         streamConfig.stream = USB;
       // e.g. {"cmd":{"name":"sample", "payload":{"type":"TCP", "rate":4000}}}
+      } else if (strcmp(typeC, "MQTT") == 0) {
+        streamConfig.stream = MQTT;
+      // e.g. {"cmd":{"name":"sample", "payload":{"type":"TCP", "rate":4000}}}
       } else if (strcmp(typeC, "TCP") == 0) {
-        sendClient = (WiFiClient*)&getter; 
+        sendClient = (WiFiClient*)&newGetter; 
         streamConfig.stream = TCP;
         streamConfig.port = STANDARD_TCP_SAMPLE_PORT;
         streamConfig.ip = sendClient->remoteIP();
@@ -816,7 +888,7 @@ void handleJSON(Stream &getter) {
         } else {
           streamConfig.port = port;
         }
-        sendClient = (WiFiClient*)&getter;
+        sendClient = (WiFiClient*)&newGetter;
         docSend["port"] = streamConfig.port;
         streamConfig.ip = sendClient->remoteIP();
       } else if (strcmp(typeC, "FFMPEG") == 0) {
@@ -949,13 +1021,14 @@ void handleJSON(Stream &getter) {
     docSend["sys_time"] = myTime.timeStr();
     docSend["name"] = config.name;
     docSend["ip"] = WiFi.localIP().toString();
+    docSend["mqtt_server"] = config.mqtt_server;
     docSend["sampling_rate"] = streamConfig.samplingRate;
     docSend["buffer_size"] = ringBuffer.getSize();
     docSend["psram"] = ringBuffer.inPSRAM();
     docSend["rtc"] = rtc.connected;
     docSend["state"] = state != STATE_IDLE ? "busy" : "idle";
     String ssids = "[";
-    for (int i = 0; i < config.numAPs; i++) {
+    for (size_t i = 0; i < config.numAPs; i++) {
       ssids += config.wifiSSIDs[i];
       if (i < config.numAPs-1) ssids += ", ";
     }
@@ -990,6 +1063,40 @@ void handleJSON(Stream &getter) {
       docSend["mdns_name"] = name;
       docSend["error"] = false;
       initMDNS();
+    } else {
+      setBusyResponse();
+      docSend["msg"] = response;
+      docSend["state"] = "busy";
+    }
+  }
+
+  /*********************** MQTT Server COMMAND ****************************/
+  // e.g. {"cmd":{"name":"mqttServer", "payload":{"server":"<ServerAddress>"}}}
+  else if (strcmp(cmd, CMD_MQTT_SERVER) == 0) {
+    if (state == STATE_IDLE) {
+      docSend["error"] = true;
+      const char* newServer = docRcv["cmd"]["payload"]["server"];
+      if (newServer == nullptr) {
+        docSend["msg"] = F("MQTTServer address required in payload with key server");
+        return;
+      }
+      if (strlen(newServer) < MAX_IP_LEN) {
+        config.setMQTTServerAddress((char * )newServer);
+      } else {
+        response = F("MQTTServer address too long, only string of size ");
+        response += MAX_IP_LEN;
+        response += F(" allowed");
+        docSend["msg"] = response;
+        return;
+      }
+      char * address = config.mqtt_server;
+      response = F("Set MQTTServer address to: ");
+      response += address;
+      //docSend["msg"] = sprintf( %s", name);
+      docSend["msg"] = response;
+      docSend["mqtt_server"] = address;
+      docSend["error"] = false;
+      initMQTT();
     } else {
       setBusyResponse();
       docSend["msg"] = response;
@@ -1035,7 +1142,7 @@ void handleJSON(Stream &getter) {
 
       docSend["msg"] = response;
       String ssids = "[";
-      for (int i = 0; i < config.numAPs; i++) {
+      for (size_t i = 0; i < config.numAPs; i++) {
         ssids += config.wifiSSIDs[i];
         ssids += ", ";
       }
@@ -1078,7 +1185,7 @@ void handleJSON(Stream &getter) {
       }
       docSend["msg"] = response;
       String ssids = "[";
-      for (int i = 0; i < config.numAPs; i++) {
+      for (size_t i = 0; i < config.numAPs; i++) {
         ssids += config.wifiSSIDs[i];
         ssids += ", ";
       }
@@ -1125,13 +1232,13 @@ void handleJSON(Stream &getter) {
       spiffsLog.flush();
       docSend["error"] = false;
       bool hasRow = spiffsLog.nextRow(&command[0]);
-      getter.printf("%s{\"cmd\":\"log\",\"msg\":\"", &LOG_PREFIX[0]);
-      getter.printf("*** LOGFile *** //n");
+      newGetter->printf("%s{\"cmd\":\"log\",\"msg\":\"", &LOG_PREFIX[0]);
+      newGetter->printf("*** LOGFile *** //n");
       while(hasRow) {
-        getter.printf("%s//n", &command[0]);
+        newGetter->printf("%s//n", &command[0]);
         hasRow = spiffsLog.nextRow(&command[0]);
       }
-      getter.println("*** LOGFile *** \"}");
+      newGetter->println("*** LOGFile *** \"}");
     } else {
       setBusyResponse();
       docSend["msg"] = response;
@@ -1278,9 +1385,166 @@ void initMDNS() {
   MDNS.addService("_elec", "_tcp", STANDARD_TCP_STREAM_PORT);
 }
 
+void mqttCallback(char* topic, byte* message, unsigned int length) {
+  memcpy(&command[0], message, length);
+  command[length] = '\0';
+  logger.log("MQTT msg on topic: %s: %s", topic, command);
+
+  // Search for last topic separator
+  size_t topicLen = strlen(topic);
+  // On not found, this will start from the beginning of the topic string
+  int lastSep = -1;
+  for (size_t i = 0; i < topicLen; i++) {
+    if (topic[i] == '\0') break;
+    if (topic[i] == MQTT_TOPIC_SEPARATOR) lastSep = i;
+  }
+  char * topicEnd = &topic[lastSep+1];
+
+
+  if(strcmp(topicEnd, MQTT_TOPIC_SWITCH) == 0) {
+    if(strcmp(command, MQTT_TOPIC_SWITCH_OFF) == 0) {
+      relay.set(false);
+    } else if(strcmp(command, MQTT_TOPIC_SWITCH_ON) == 0) {
+      relay.set(true);
+    }
+  }
+  else if(strcmp(topicEnd, MQTT_TOPIC_CMD) == 0) {
+    // message was already copied to command array
+    parseCommand();
+    handleJSON();
+
+    if (docSend.isNull() == false) {
+      response = "";
+      serializeJson(docSend, response);
+      // This might be too long for the logger
+      logger.log(response.c_str());
+      mqttClient.publish(mqttTopicPubInfo, response.c_str());
+    }
+    response = "";
+    command[0] = '\0';
+  }
+    
+  else if(strcmp(topicEnd, MQTT_TOPIC_SAMPLE) == 0) {
+    logger.log("MQTT wants sample");
+    float value = -1.0;
+    char unit[4] = {'\0'};
+    if(strcmp(command, "v") == 0) {
+      value = stpm34.readFundamentalVoltage(1);
+      sprintf(unit, "V");
+    }
+    else if(strcmp(command, "i") == 0) {
+      value = stpm34.readRMSCurrent(1);
+      sprintf(unit, "mA");
+    }
+    else if(strcmp(command, "q") == 0) {
+      value = stpm34.readReactivePower(1);
+      sprintf(unit, "var");
+    }
+    else if(strcmp(command, "s") == 0) {
+      value = stpm34.readApparentRMSPower(1);
+      sprintf(unit, "VA");
+    // default is active power
+    } else {
+      value = stpm34.readActivePower(1);
+      sprintf(unit, "W");
+    }
+    JsonObject obj = docSend.to<JsonObject>();
+    obj.clear();
+    docSend["value"] = value;
+    docSend["unit"] = unit;
+    docSend["ts"] = myTime.timeStr();
+    response = "";
+    serializeJson(docSend, response);
+    logger.log(response.c_str());
+    mqttClient.publish(mqttTopicPubSample, response.c_str());
+  }
+}
+
+
+/****************************************************
+ * Init the MDNs name from eeprom, only the number ist
+ * stored in the eeprom, construct using prefix.
+ ****************************************************/
+void initMQTT() {
+  mqttConnected = false;
+  char * serverAddress = config.mqtt_server;
+  if (strlen(serverAddress) == 0) {
+    logger.log(ERROR, "Sth wrong with mqtt Server");
+    return;
+  }
+  // Setting up MDNs with the given Name
+  logger.log("Try to connect to MQTT Server: %s", serverAddress);
+
+  // if we changed server and were connected
+  if (mqttClient.connected()) mqttClient.disconnect();
+
+  // Set server
+  mqttClient.setServer(serverAddress, 1883);
+  mqttClient.setCallback(mqttCallback);
+  
+  // Look if connection is successfull and return if not
+  if (!mqttClient.connect(config.name)) {
+    logger.log("Cannot connect to mqtt");
+    return;
+  } 
+
+  // Subscribe to all the topics
+  mqttConnected = true;
+
+  // Build publish topics
+  sprintf(&mqttTopicPubSwitch[0], "%s%c", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR);
+
+  response = "";
+  response += mqttTopicPubSwitch;
+  response += "+";
+  logger.log("Subscribing to: %s", response.c_str());
+  mqttClient.subscribe(response.c_str());
+  mqttClient.loop();
+
+  // // Subscribe topics
+  // response = "";
+  // response += mqttTopicPubSwitch;
+  // response += MQTT_TOPIC_SWITCH;
+  // mqttClient.subscribe(response.c_str());
+  // logger.log("Subscribing to: %s", response.c_str());
+  // // Subscribe to sample
+  // response = "";
+  // response += mqttTopicPubSwitch;
+  // response += MQTT_TOPIC_SAMPLE;
+  // mqttClient.subscribe(response.c_str());
+  // logger.log("Subscribing to: %s", response.c_str());
+
+  sprintf(&mqttTopicPubSwitch[0], "%s%c%s%c", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR, config.name, MQTT_TOPIC_SEPARATOR);
+
+  response = "";
+  response += mqttTopicPubSwitch;
+  response += "+";
+  logger.log("Subscribing to: %s", response.c_str());
+  mqttClient.subscribe(response.c_str());
+  mqttClient.loop();
+  // // Subscribe topics
+  // response = "";
+  // response += mqttTopicPubSwitch;
+  // response += MQTT_TOPIC_SWITCH;
+  // mqttClient.subscribe(response.c_str());
+  // logger.log("Subscribing to: %s", response.c_str());
+  // // Subscribe to sample
+  // response = "";
+  // response += mqttTopicPubSwitch;
+  // response += MQTT_TOPIC_SAMPLE;
+  // mqttClient.subscribe(response.c_str());
+  // logger.log("Subscribing to: %s", response.c_str());
+  
+  sprintf(&mqttTopicPubSwitch[0], "%s%c%s%c%s%c%s", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR, config.name, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_STATE, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_SWITCH);
+  sprintf(&mqttTopicPubSample[0], "%s%c%s%c%s%c%s", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR, config.name, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_STATE, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_SAMPLE);
+  sprintf(&mqttTopicPubInfo[0], "%s%c%s%c%s%c%s", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR, config.name, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_STATE, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_INFO);
+  logger.log("MQTT connected"); 
+}
+
+
 // Make sure enough memory is allocated for str
 void setInfoString(char * str) {
-  int idx = 0;
+  size_t idx = 0;
   idx += sprintf(&str[idx], "\n");
   // Name and firmware
   idx += sprintf(&str[idx], "%s @ firmware: %s/%s", config.name, __DATE__, __TIME__);
@@ -1304,10 +1568,19 @@ void setInfoString(char * str) {
   idx += sprintf(&str[idx], "\nCurrent system time: ToImplement");
   // All SSIDs
   String ssids = "";
-  for (int i = 0; i < config.numAPs; i++) {
+  for (size_t i = 0; i < config.numAPs; i++) {
     ssids += config.wifiSSIDs[i];
     if (i < config.numAPs-1) ssids += ", ";
   }
   idx += sprintf(&str[idx], "\nKnown Networks: [%s]", ssids.c_str());
   idx += sprintf(&str[idx], "\n");
+}
+
+void relayCB(bool value) {
+  if (mqttClient.connected()) mqttClient.publish(mqttTopicPubSwitch, value ? MQTT_TOPIC_SWITCH_ON : MQTT_TOPIC_SWITCH_OFF);
+  logger.log("Switched %s", value ? "on" : "off");
+}
+
+void sampleCB() {
+  if (mqttClient.connected()) mqttClient.publish(mqttTopicPubSample, state==STATE_SAMPLE ? MQTT_TOPIC_SWITCH_ON : MQTT_TOPIC_SWITCH_OFF);
 }
