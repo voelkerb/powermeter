@@ -102,21 +102,21 @@ volatile uint32_t timer_now;
 
 
 // Internal state machine for sampling
-enum SampleState{STATE_IDLE, STATE_SAMPLE};
+enum class SampleState{IDLE, SAMPLE};
 
-SampleState state = STATE_IDLE;
-SampleState next_state = STATE_IDLE;
+SampleState state = SampleState::IDLE;
+SampleState next_state = SampleState::IDLE;
 
 // Available measures are VOLTAGE+CURRENT, ACTIVE+REACTIVE Power or both
-enum Measures{STATE_VI, STATE_PQ, STATE_VIPQ};
-enum StreamType{USB, TCP, UDP, TCP_RAW, MQTT};
+enum class Measures{VI, PQ, VIPQ};
+enum class StreamType{USB, TCP, UDP, TCP_RAW, MQTT};
 
 struct StreamConfig {
   bool prefix = false;                      // Send data with "data:" prefix
-  Measures measures = STATE_VI;             // The measures to send
+  Measures measures = Measures::VI;             // The measures to send
   uint8_t measurementBytes = 8;             // Number of bytes for each measurement entry
   unsigned int samplingRate = DEFAULT_SR;   // The samplingrate
-  StreamType stream = USB;                  // Channel over which to send
+  StreamType stream = StreamType::USB;                  // Channel over which to send
   unsigned int countdown = 0;               // Start at specific time or immidiately
   uint32_t chunkSize = 0;                   // Chunksize of one packet sent
   IPAddress ip;                             // Ip address of data sink
@@ -139,7 +139,9 @@ StreamLogger * streamLog[MAX_CLIENTS];
 // Strean client is for ffmpeg direct streaming
 WiFiClient streamClient;
 // tcp stuff is send over this client 
-Stream * newGetter;
+// Init getter to point to sth, might not work otherwise
+Stream * newGetter = &Serial;
+
 WiFiClient * sendClient;
 // UDP used for streaming
 WiFiUDP udpClient;
@@ -228,8 +230,9 @@ void setup() {
   if (!success) logger.log(ERROR, "Cannot init RTC");
   successAll &= success;
   relay.set(true);
-  relay.setCallback(relayCB);
   
+  relay.setCallback(relayCB);
+
   // We do not need bluetooth, so disable it
   esp_bt_controller_disable();
   pinMode(ERROR_LED, OUTPUT);
@@ -241,7 +244,16 @@ void setup() {
   delay(200);
   digitalWrite(ERROR_LED, HIGH);
 
+  config.init();
+
+  // config.makeDefault();
+  // config.store();
+  
+  
   config.load();
+
+  relay.set(config.getRelayState());
+
 
   coreFreq = getCpuFrequencyMhz();
   logger.log(DEBUG, "%s @ firmware %s/%s", config.name, __DATE__, __TIME__);
@@ -290,17 +302,17 @@ void loop() {
   if (updating) return;
 
   // Stuff done on idle
-  if (state == STATE_IDLE) {
+  if (state == SampleState::IDLE) {
     onIdle();
   // Stuff on sampling
-  } else if (state == STATE_SAMPLE) {
+  } else if (state == SampleState::SAMPLE) {
     onSampling();
   }
 
   onIdleOrSampling();
 
   // If we only have 200 ms before sampling should start, wait actively
-  if (next_state != STATE_IDLE) {
+  if (next_state != SampleState::IDLE) {
     if (streamConfig.countdown != 0 and (streamConfig.countdown - millis()) < 200) {
       // Disable any wifi sleep mode
       esp_wifi_set_ps(WIFI_PS_NONE);
@@ -351,7 +363,7 @@ void onWifiConnect() {
 void onWifiDisconnect() {
   logger.log(ERROR, "Wifi Disconnected");
 
-  if (state != STATE_IDLE) {
+  if (state != SampleState::IDLE) {
     logger.log(ERROR, "Stop sampling (Wifi disconnect)");
     stopSampling();
   }
@@ -430,6 +442,7 @@ void onIdle() {
   if ((long)(millis() - lifenessUpdate) >= 0) {
     lifenessUpdate += LIFENESS_UPDATE_INTERVAL;
     logger.log("");
+    logger.log("%s", config.getRelayState() ? "on":"off");
   }
 
   // Look for people connecting over the stream server
@@ -438,10 +451,10 @@ void onIdle() {
     streamClient = streamServer.available();
     if (streamClient.connected()) {
       // Set everything to default settings
-      streamConfig.stream = TCP_RAW;
+      streamConfig.stream = StreamType::TCP_RAW;
       streamConfig.prefix = false;
       streamConfig.samplingRate = DEFAULT_SR;
-      streamConfig.measures = STATE_VI;
+      streamConfig.measures = Measures::VI;
       streamConfig.ip = streamClient.remoteIP();
       streamConfig.port = STANDARD_TCP_SAMPLE_PORT;
       sendClient = &streamClient;
@@ -518,20 +531,20 @@ void onSampling() {
   // ______________ Handle Disconnect ________________
 
   // NOTE: Cannot detect disconnect for USB
-  if (streamConfig.stream == USB) {
-  } else if (streamConfig.stream == TCP) {
+  if (streamConfig.stream == StreamType::USB) {
+  } else if (streamConfig.stream == StreamType::TCP) {
     if (!sendClient->connected()) {
       logger.log(ERROR, "TCP disconnected while streaming");
       stopSampling();
     }
   // Disconnect of UDP means disconnecting from tcp port
-  } else if (streamConfig.stream == UDP) {
+  } else if (streamConfig.stream == StreamType::UDP) {
     if (!sendClient->connected()) {
       logger.log(ERROR, "TCP/UDP disconnected while streaming");
       stopSampling();
     }
   // Disconnect of raw stream means stop
-  } else if (streamConfig.stream == TCP_RAW) {
+  } else if (streamConfig.stream == StreamType::TCP_RAW) {
     // Check for intended connection loss
     if (!sendClient->connected()) {
       logger.log(INFO, "TCP Stream disconnected");
@@ -543,42 +556,46 @@ void onSampling() {
 // Depending on data sink, send data
 void writeChunks(bool tail) {
   while(ringBuffer.available() > streamConfig.chunkSize) {
-    if (streamConfig.stream == UDP) {
+    if (streamConfig.stream == StreamType::UDP) {
       udpClient.beginPacket(streamConfig.ip, streamConfig.port);
       writeData(udpClient, streamConfig.chunkSize);
       udpClient.endPacket();
-    } else if (streamConfig.stream == TCP) {
+    } else if (streamConfig.stream == StreamType::TCP) {
       writeData(*sendClient, streamConfig.chunkSize);
-    } else if (streamConfig.stream == TCP_RAW) {
+    } else if (streamConfig.stream == StreamType::TCP_RAW) {
       writeData(*sendClient, streamConfig.chunkSize);
-    } else if (streamConfig.stream == USB) {
+    } else if (streamConfig.stream == StreamType::USB) {
       writeData(Serial, streamConfig.chunkSize);
-    } else if (streamConfig.stream == MQTT) {
+    } else if (streamConfig.stream ==  StreamType::MQTT) {
       writeDataMQTT(streamConfig.chunkSize);
     }
   }
   if (tail) {
-    if (streamConfig.stream == UDP) {
+    if (streamConfig.stream == StreamType::UDP) {
       udpClient.beginPacket(streamConfig.ip, streamConfig.port);
       writeData(udpClient, ringBuffer.available());
       udpClient.endPacket();
-    } else if (streamConfig.stream == TCP) {
+    } else if (streamConfig.stream == StreamType::TCP) {
       writeData(*sendClient, ringBuffer.available());
-    } else if (streamConfig.stream == TCP_RAW) {
+    } else if (streamConfig.stream == StreamType::TCP_RAW) {
       writeData(*sendClient, ringBuffer.available());
-    } else if (streamConfig.stream == USB) {
+    } else if (streamConfig.stream == StreamType::USB) {
       writeData(Serial, ringBuffer.available());
+    } else if (streamConfig.stream ==  StreamType::MQTT) {
+      writeDataMQTT(streamConfig.chunkSize);
     }
   }
 }
+
 void writeDataMQTT(uint16_t size) {
   if (size <= 0) return;
   size_t i = 0;
   while (i < size) { 
     i++;
   }
-  
+  logger.log(ERROR, "TODO implement");
 }
+
 // Data prefix 
 const char data_id[5] = {'D','a','t','a',':'};
 void writeData(Stream &getter, uint16_t size) {
@@ -621,7 +638,7 @@ void IRAM_ATTR sample_timer_task(void *param) {
 
   int test = 0;
 
-  while (state == STATE_SAMPLE) {
+  while (state == SampleState::SAMPLE) {
     xSemaphoreTake(timer_sem, portMAX_DELAY);
     // test++;
     // if (test%100 == 0) {
@@ -639,12 +656,12 @@ void IRAM_ATTR sample_timer_task(void *param) {
       if (rtc.connected) timerAlarmDisable(timer);
     }
 
-    if (streamConfig.measures == STATE_VI) {
+    if (streamConfig.measures == Measures::VI) {
       stpm34.readVoltAndCurr((float*) &data[0]);
       // stpm34.readVoltageAndCurrent(1, (float*) &values[0], (float*) &values[1]);
-    } else if (streamConfig.measures == STATE_PQ) {
+    } else if (streamConfig.measures == Measures::PQ) {
       stpm34.readPower(1, (float*) &data[0], (float*) &data[2], (float*) &data[1], (float*) &data[2]);
-    } else if (streamConfig.measures == STATE_VIPQ) {
+    } else if (streamConfig.measures == Measures::VIPQ) {
       stpm34.readAll(1, (float*) &data[0], (float*) &data[1], (float*) &data[2], (float*) &data[3]);
     }
 
@@ -817,7 +834,7 @@ void handleJSON() {
   /*********************** SAMPLING COMMAND ****************************/
   // e.g. {"cmd":{"name":"sample", "payload":{"type":"Serial", "rate":4000}}}
   if(strcmp(cmd, CMD_SAMPLE) == 0) {
-    if (state == STATE_IDLE) {
+    if (state == SampleState::IDLE) {
       // For sampling we need type payload and rate payload
       const char* typeC = root["cmd"]["payload"]["type"];
       const char* measuresC = root["cmd"]["payload"]["measures"];
@@ -841,16 +858,16 @@ void handleJSON() {
         return;
       }
       if (measuresC == nullptr) {
-        streamConfig.measures = STATE_VI;
+        streamConfig.measures = Measures::VI;
         streamConfig.measurementBytes = 8;
       } else if (strcmp(measuresC, "v,i") == 0) {
-        streamConfig.measures = STATE_VI;
+        streamConfig.measures = Measures::VI;
         streamConfig.measurementBytes = 8;
       } else if (strcmp(measuresC, "p,q") == 0) {
-        streamConfig.measures = STATE_PQ;
+        streamConfig.measures = Measures::PQ;
         streamConfig.measurementBytes = 8;
       } else if (strcmp(measuresC, "v,i,p,q") == 0) {
-        streamConfig.measures = STATE_VIPQ;
+        streamConfig.measures = Measures::VIPQ;
         streamConfig.measurementBytes = 16;
       } else {
         response = "Unsupported measures";
@@ -865,19 +882,19 @@ void handleJSON() {
       }
       // e.g. {"cmd":{"name":"sample", "payload":{"type":"Serial", "rate":4000}}}
       if (strcmp(typeC, "Serial") == 0) {
-        streamConfig.stream = USB;
-      // e.g. {"cmd":{"name":"sample", "payload":{"type":"TCP", "rate":4000}}}
+        streamConfig.stream = StreamType::USB;
+      // e.g. {"cmd":{"name":"sample", "payload":{"type":"MQTT", "rate":4000}}}
       } else if (strcmp(typeC, "MQTT") == 0) {
-        streamConfig.stream = MQTT;
+        streamConfig.stream = StreamType::MQTT;
       // e.g. {"cmd":{"name":"sample", "payload":{"type":"TCP", "rate":4000}}}
       } else if (strcmp(typeC, "TCP") == 0) {
-        sendClient = (WiFiClient*)&newGetter; 
-        streamConfig.stream = TCP;
+        sendClient = (WiFiClient*)newGetter; 
+        streamConfig.stream = StreamType::TCP;
         streamConfig.port = STANDARD_TCP_SAMPLE_PORT;
         streamConfig.ip = sendClient->remoteIP();
       // e.g. {"cmd":{"name":"sample", "payload":{"type":"UDP", "rate":4000}}}
       } else if (strcmp(typeC, "UDP") == 0) {
-        streamConfig.stream = UDP;
+        streamConfig.stream = StreamType::UDP;
         int port = docRcv["cmd"]["payload"]["port"].as<int>();
         if (port > 80000 || port <= 0) {
           streamConfig.port = STANDARD_UDP_PORT;
@@ -888,7 +905,7 @@ void handleJSON() {
         } else {
           streamConfig.port = port;
         }
-        sendClient = (WiFiClient*)&newGetter;
+        sendClient = (WiFiClient*)newGetter;
         docSend["port"] = streamConfig.port;
         streamConfig.ip = sendClient->remoteIP();
       } else if (strcmp(typeC, "FFMPEG") == 0) {
@@ -926,7 +943,7 @@ void handleJSON() {
 
       relay.set(true);
 
-      next_state = STATE_SAMPLE;
+      next_state = SampleState::SAMPLE;
 
       if (ts != 0) {
         response += F("Should sample at: ");
@@ -1005,6 +1022,7 @@ void handleJSON() {
   // e.g. {"cmd":{"name":"factoryReset"}}
   else if (strcmp(cmd, CMD_RESET) == 0) {
     config.makeDefault();
+    config.store();
     ESP.restart();
   }
 
@@ -1021,12 +1039,12 @@ void handleJSON() {
     docSend["sys_time"] = myTime.timeStr();
     docSend["name"] = config.name;
     docSend["ip"] = WiFi.localIP().toString();
-    docSend["mqtt_server"] = config.mqtt_server;
+    docSend["mqtt_server"] = config.mqttServer;
     docSend["sampling_rate"] = streamConfig.samplingRate;
     docSend["buffer_size"] = ringBuffer.getSize();
     docSend["psram"] = ringBuffer.inPSRAM();
     docSend["rtc"] = rtc.connected;
-    docSend["state"] = state != STATE_IDLE ? "busy" : "idle";
+    docSend["state"] = state != SampleState::IDLE ? "busy" : "idle";
     String ssids = "[";
     for (size_t i = 0; i < config.numAPs; i++) {
       ssids += config.wifiSSIDs[i];
@@ -1039,7 +1057,7 @@ void handleJSON() {
   /*********************** MDNS COMMAND ****************************/
   // e.g. {"cmd":{"name":"mdns", "payload":{"name":"newName"}}}
   else if (strcmp(cmd, CMD_MDNS) == 0) {
-    if (state == STATE_IDLE) {
+    if (state == SampleState::IDLE) {
       docSend["error"] = true;
       const char* newName = docRcv["cmd"]["payload"]["name"];
       if (newName == nullptr) {
@@ -1073,7 +1091,7 @@ void handleJSON() {
   /*********************** MQTT Server COMMAND ****************************/
   // e.g. {"cmd":{"name":"mqttServer", "payload":{"server":"<ServerAddress>"}}}
   else if (strcmp(cmd, CMD_MQTT_SERVER) == 0) {
-    if (state == STATE_IDLE) {
+    if (state == SampleState::IDLE) {
       docSend["error"] = true;
       const char* newServer = docRcv["cmd"]["payload"]["server"];
       if (newServer == nullptr) {
@@ -1089,7 +1107,7 @@ void handleJSON() {
         docSend["msg"] = response;
         return;
       }
-      char * address = config.mqtt_server;
+      char * address = config.mqttServer;
       response = F("Set MQTTServer address to: ");
       response += address;
       //docSend["msg"] = sprintf( %s", name);
@@ -1106,7 +1124,7 @@ void handleJSON() {
   /*********************** ADD WIFI COMMAND ****************************/
   // e.g. {"cmd":{"name":"addWifi", "payload":{"ssid":"ssidName","pwd":"pwdName"}}}
   else if (strcmp(cmd, CMD_ADD_WIFI) == 0) {
-    if (state == STATE_IDLE) {
+    if (state == SampleState::IDLE) {
       docSend["error"] = true;
       const char* newSSID = docRcv["cmd"]["payload"]["ssid"];
       const char* newPWD = docRcv["cmd"]["payload"]["pwd"];
@@ -1158,7 +1176,7 @@ void handleJSON() {
   /*********************** DEl WIFI COMMAND ****************************/
   // e.g. {"cmd":{"name":"delWifi", "payload":{"ssid":"ssidName"}}}
   else if (strcmp(cmd, CMD_REMOVE_WIFI) == 0) {
-    if (state == STATE_IDLE) {
+    if (state == SampleState::IDLE) {
       docSend["error"] = true;
       const char* newSSID = docRcv["cmd"]["payload"]["ssid"];
       if (newSSID == nullptr) {
@@ -1215,7 +1233,7 @@ void handleJSON() {
   /*********************** Clear Log COMMAND ****************************/
   // e.g. {"cmd":{"name":"clearLog"}}
   else if (strcmp(cmd, CMD_CLEAR_LOG) == 0) {
-    if (state == STATE_IDLE) {
+    if (state == SampleState::IDLE) {
       docSend["error"] = false;
       spiffsLog.clear();
     } else {
@@ -1228,7 +1246,7 @@ void handleJSON() {
   /*********************** Get Log COMMAND ****************************/
   // e.g. {"cmd":{"name":"getLog"}}
   else if (strcmp(cmd, CMD_GET_LOG) == 0) {
-    if (state == STATE_IDLE) {
+    if (state == SampleState::IDLE) {
       spiffsLog.flush();
       docSend["error"] = false;
       bool hasRow = spiffsLog.nextRow(&command[0]);
@@ -1255,8 +1273,8 @@ void handleJSON() {
  ****************************************************/
 void stopSampling() {
   if (rtc.connected) rtc.disableInterrupt();
-  state = STATE_IDLE;
-  next_state = STATE_IDLE;
+  state = SampleState::IDLE;
+  next_state = SampleState::IDLE;
   // Stop the timer interrupt
   turnInterrupt(false);
   samplingDuration = millis() - startSamplingMillis;
@@ -1265,6 +1283,8 @@ void stopSampling() {
   streamConfig.countdown = 0;
   lifenessUpdate = millis();
   mdnsUpdate = millis();
+  // If realy has toggled store its new value
+  config.store();
 }
 
 /****************************************************
@@ -1288,9 +1308,9 @@ void calcChunkSize() {
   chunkSize = min((int)chunkSize, MAX_SEND_SIZE);
   // For UDP we only allow 512, because no nagle algorithm will split
   // the data into subframes like in the tcp case
-  if (streamConfig.stream == UDP) {
+  if (streamConfig.stream == StreamType::UDP) {
     chunkSize = min((int)chunkSize, 512);
-  } else if (streamConfig.stream == USB) {
+  } else if (streamConfig.stream == StreamType::USB) {
     // For mac we only have 1020 bytes
     chunkSize = min((int)chunkSize, 16);
   }
@@ -1309,7 +1329,7 @@ inline void startSampling() {
 
 void startSampling(bool waitVoltage) {
   // Reset all variables
-  state = STATE_SAMPLE;
+  state = SampleState::SAMPLE;
   xTaskCreatePinnedToCore(  sample_timer_task,     /* Task function. */
     "Consumer",       /* String with name of task. */
     4096,            /* Stack size in words. */
@@ -1467,7 +1487,7 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
  ****************************************************/
 void initMQTT() {
   mqttConnected = false;
-  char * serverAddress = config.mqtt_server;
+  char * serverAddress = config.mqttServer;
   if (strlen(serverAddress) == 0) {
     logger.log(ERROR, "Sth wrong with mqtt Server");
     return;
@@ -1577,10 +1597,14 @@ void setInfoString(char * str) {
 }
 
 void relayCB(bool value) {
+  if (state != SampleState::SAMPLE) { 
+    // Only if we are not sampling, we can use SPI/EEEPROM
+    config.setRelayState(value); 
+  }
   if (mqttClient.connected()) mqttClient.publish(mqttTopicPubSwitch, value ? MQTT_TOPIC_SWITCH_ON : MQTT_TOPIC_SWITCH_OFF);
   logger.log("Switched %s", value ? "on" : "off");
 }
 
 void sampleCB() {
-  if (mqttClient.connected()) mqttClient.publish(mqttTopicPubSample, state==STATE_SAMPLE ? MQTT_TOPIC_SWITCH_ON : MQTT_TOPIC_SWITCH_OFF);
+  if (mqttClient.connected()) mqttClient.publish(mqttTopicPubSample, state==SampleState::SAMPLE ? MQTT_TOPIC_SWITCH_ON : MQTT_TOPIC_SWITCH_OFF);
 }
