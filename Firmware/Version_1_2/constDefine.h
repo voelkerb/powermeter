@@ -2,7 +2,7 @@
 
 // Serial Speed and DEBUG option
 // #define SERIAL_SPEED 9600
-#define SERIAL_SPEED 2000000
+#define SERIAL_SPEED 115200
 // #define DEBUG_DEEP
 #define SENT_LIFENESS_TO_CLIENTS
 
@@ -47,7 +47,6 @@ const int STPM_RES = 5;
 
 // Pin for 230V Relay
 const int RELAY_PIN_S = 2;
-
 
 
 // Buffering stuff
