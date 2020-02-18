@@ -165,7 +165,6 @@ long lifenessUpdate = millis();
 long mdnsUpdate = millis();
 long tcpUpdate = millis();
 long rtcUpdate = millis();
-long mqttUpdate = millis();
 
 // HW Timer and mutex for sapmpling ISR
 hw_timer_t * timer = NULL;
@@ -515,17 +514,18 @@ void onMQTTDisconnect() {
  * If ESP is connected to wifi successfully
  ****************************************************/
 void onWifiConnect() {
-  logger.log(ALL, "Wifi Connected");
-  logger.log(ALL, "IP: %s", WiFi.localIP().toString().c_str());
-  // The stuff todo if we have a network connection (and hopefully internet as well)
-  if (Network::connected and not Network::apMode) {
+  if (not Network::apMode) {
+    logger.log(ALL, "Wifi Connected");
+    logger.log(ALL, "IP: %s", WiFi.localIP().toString().c_str());
+    // The stuff todo if we have a network connection (and hopefully internet as well)
     myTime.updateNTPTime();
+    if (!mqtt.connect()) logger.log(ERROR, "Cannot connect to MQTT Server %s", mqtt.ip);
+  } else {
+    logger.log(ALL, "Network AP Opened");
   }
 
   // Reinit mdns
   initMDNS();
-  // Connect mqtt
-  if (!mqtt.connect()) logger.log(ERROR, "Cannot connect to MQTT Server %s", mqtt.ip);
 
   // Start the TCP server
   server.begin();
@@ -758,6 +758,7 @@ void setupOTA() {
   // ArduinoOTA.setPasswordHash(2"21232f297a57a5a743894a0e4a801fc3");
 
   ArduinoOTA.onStart([]() {
+    Network::allowNetworkChange = false;
     updating = true;
     logger.log("Start updating");
 
@@ -823,6 +824,7 @@ void stopSampling() {
   mdnsUpdate = millis();
   // If realy has toggled store its new value
   config.store();
+  sampleCB();
 }
 
 /****************************************************
@@ -872,6 +874,7 @@ inline void startSampling() {
 void startSampling(bool waitVoltage) {
   // Reset all variables
   state = SampleState::SAMPLE;
+  sampleCB();
   xTaskCreatePinnedToCore(  sample_timer_task,     /* Task function. */
     "Consumer",       /* String with name of task. */
     4096,            /* Stack size in words. */
@@ -1036,4 +1039,6 @@ void relayCB(bool value) {
  ****************************************************/
 void sampleCB() {
   if (mqtt.connected) mqtt.publish(mqttTopicPubSample, state==SampleState::SAMPLE ? MQTT_TOPIC_SWITCH_ON : MQTT_TOPIC_SWITCH_OFF);
+  // Do not allow network changes on sampling
+  Network::allowNetworkChange = state==SampleState::SAMPLE ? true : false;
 }
