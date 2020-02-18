@@ -43,3 +43,6 @@
 [submodule "Firmware/Version_1_2/src/time"]
 	path = Firmware/Version_1_2/src/time
 	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.time
+[submodule "Firmware/Version_2_1/src/mqtt"]
+	path = Firmware/Version_2_1/src/mqtt
+	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.mqtt

@@ -24,6 +24,7 @@
 #include "src/config/config.h"
 #include "src/time/timeHandling.h"
 #include "src/ringbuffer/ringbuffer.h"
+#include "src/mqtt/mqtt.h"
 // #include "parseCommands.ino"
 
 
@@ -107,6 +108,9 @@ enum class SampleState{IDLE, SAMPLE};
 
 SampleState state = SampleState::IDLE;
 SampleState next_state = SampleState::IDLE;
+
+// Define it before StreamType enum redefines it
+MQTT mqtt;
 
 // Available measures are VOLTAGE+CURRENT, ACTIVE+REACTIVE Power or both
 enum class Measures{VI, PQ, VIPQ};
@@ -200,12 +204,10 @@ StaticJsonDocument<2*COMMAND_MAX_SIZE> docRcv;
 StaticJsonDocument<2*COMMAND_MAX_SIZE> docSend;
 String response = "";
 
+
 char mqttTopicPubSwitch[MAX_MQTT_PUB_TOPIC_SWITCH+MAX_NAME_LEN] = {'\0'};
 char mqttTopicPubSample[MAX_MQTT_PUB_TOPIC_SAMPLE+MAX_NAME_LEN] = {'\0'};
 char mqttTopicPubInfo[MAX_MQTT_PUB_TOPIC_INFO+MAX_NAME_LEN] = {'\0'};
-bool mqttConnected = false;
-WiFiClient mqtt_client;
-PubSubClient mqttClient(mqtt_client);
 
 /************************ SETUP *************************/
 void setup() {
@@ -282,6 +284,11 @@ void setup() {
 
   response.reserve(2*COMMAND_MAX_SIZE);
 
+  // Set mqtt and callbacks
+  mqtt.init(config.mqttServer, config.name);
+  mqtt.onConnect = &onMQTTConnect;
+  mqtt.onDisconnect = &onMQTTDisconnect;
+  mqtt.onMessage = &mqttCallback;
 
   setInfoString(&command[0]);
   logger.log(&command[0]);
@@ -292,7 +299,6 @@ void setup() {
   mdnsUpdate = millis();
   tcpUpdate = millis();
   rtcUpdate = millis();
-  mqttUpdate = millis();
 }
 
 /************************ Loop *************************/
@@ -333,7 +339,7 @@ void loop() {
 void onIdleOrSampling() {
 
   // MQTT loop
-  mqttClient.loop();
+  mqtt.update();
 
   // Handle serial requests
   if (Serial.available()) {
@@ -382,19 +388,7 @@ void onIdle() {
     // initMDNS();
     //MDNS.addService("_elec", "_tcp", STANDARD_TCP_STREAM_PORT);
   }
-  // MQTT stuff, check connection status, on disconnect, try reconnect
-  // TODO: no clue why, but does not work properly for esp32 (maybe it is the mac side)
-  if ((long)(millis() - mqttUpdate) >= 0) {
-    mqttUpdate += MQTT_UPDATE_INTERVAL;
-
-    if (mqttConnected and !mqttClient.connected()) {
-      logger.log(WARNING, "Disconnected from MQTT server");
-      mqttConnected = false;
-    }
-    if (!mqttConnected) {
-      initMQTT();
-    }
-  }
+  
 
   if ((long)(millis() - rtcUpdate) >= 0) {
     rtcUpdate += RTC_UPDATE_INTERVAL;
@@ -503,6 +497,21 @@ char * timeStr() {
 }
 
 /****************************************************
+ * If MQTT Server connection was successfull
+ ****************************************************/
+void onMQTTConnect() {
+  logger.log("MQTT connected to %s", mqtt.ip);
+  mqttSubscribe();
+}
+
+/****************************************************
+ * If MQTT Server disconnected
+ ****************************************************/
+void onMQTTDisconnect() {
+  logger.log("MQTT disconnected from %s", mqtt.ip);
+}
+
+/****************************************************
  * If ESP is connected to wifi successfully
  ****************************************************/
 void onWifiConnect() {
@@ -515,6 +524,9 @@ void onWifiConnect() {
 
   // Reinit mdns
   initMDNS();
+  // Connect mqtt
+  if (!mqtt.connect()) logger.log(ERROR, "Cannot connect to MQTT Server %s", mqtt.ip);
+
   // Start the TCP server
   server.begin();
   streamServer.begin();
@@ -524,7 +536,6 @@ void onWifiConnect() {
   mdnsUpdate = millis();
   tcpUpdate = millis();
   rtcUpdate = millis();
-  mqttUpdate = millis();
 }
 
 /****************************************************
@@ -537,6 +548,7 @@ void onWifiDisconnect() {
     logger.log(ERROR, "Stop sampling (Wifi disconnect)");
     stopSampling();
   }
+  if (mqtt.connected) mqtt.disconnect();
 }
 
 /****************************************************
@@ -938,35 +950,16 @@ void initMDNS() {
   MDNS.addService("_elec", "_tcp", STANDARD_TCP_STREAM_PORT);
 }
 
+
 /****************************************************
- * Init MQTT communication, handle server connect
- * and subscribe to topics on success
+ * Subscribe to the mqtt topics we want to listen
+ * and build the publish topics
  ****************************************************/
-void initMQTT() {
-  mqttConnected = false;
-  char * serverAddress = config.mqttServer;
-  if (strlen(serverAddress) == 0) {
+void mqttSubscribe() {
+  if (!mqtt.connected) {
     logger.log(ERROR, "Sth wrong with mqtt Server");
     return;
   }
-  // Setting up MDNs with the given Name
-  logger.log("Try to connect to MQTT Server: %s", serverAddress);
-
-  // if we changed server and were connected
-  if (mqttClient.connected()) mqttClient.disconnect();
-
-  // Set server
-  mqttClient.setServer(serverAddress, 1883);
-  mqttClient.setCallback(mqttCallback);
-  
-  // Look if connection is successfull and return if not
-  if (!mqttClient.connect(config.name)) {
-    logger.log("Cannot connect to mqtt");
-    return;
-  } 
-
-  // Subscribe to all the topics
-  mqttConnected = true;
 
   // Build publish topics
   sprintf(&mqttTopicPubSwitch[0], "%s%c", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR);
@@ -974,21 +967,18 @@ void initMQTT() {
   response = mqttTopicPubSwitch;
   response += "+";
   logger.log("Subscribing to: %s", response.c_str());
-  mqttClient.subscribe(response.c_str());
-  mqttClient.loop();
-
+  mqtt.subscribe(response.c_str());
+  
   sprintf(&mqttTopicPubSwitch[0], "%s%c%s%c", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR, config.name, MQTT_TOPIC_SEPARATOR);
 
   response = mqttTopicPubSwitch;
   response += "+";
   logger.log("Subscribing to: %s", response.c_str());
-  mqttClient.subscribe(response.c_str());
-  mqttClient.loop();
+  mqtt.subscribe(response.c_str());
   
   sprintf(&mqttTopicPubSwitch[0], "%s%c%s%c%s%c%s", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR, config.name, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_STATE, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_SWITCH);
   sprintf(&mqttTopicPubSample[0], "%s%c%s%c%s%c%s", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR, config.name, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_STATE, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_SAMPLE);
   sprintf(&mqttTopicPubInfo[0], "%s%c%s%c%s%c%s", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR, config.name, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_STATE, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_INFO);
-  logger.log("MQTT connected"); 
 }
 
 /****************************************************
@@ -1037,7 +1027,7 @@ void relayCB(bool value) {
     // Only if we are not sampling, we can use SPI/EEEPROM
     config.setRelayState(value); 
   }
-  if (mqttClient.connected()) mqttClient.publish(mqttTopicPubSwitch, value ? MQTT_TOPIC_SWITCH_ON : MQTT_TOPIC_SWITCH_OFF);
+  if (mqtt.connected) mqtt.publish(mqttTopicPubSwitch, value ? MQTT_TOPIC_SWITCH_ON : MQTT_TOPIC_SWITCH_OFF);
   logger.log("Switched %s", value ? "on" : "off");
 }
 
@@ -1045,5 +1035,5 @@ void relayCB(bool value) {
  * Callback if sampling will be perfomed
  ****************************************************/
 void sampleCB() {
-  if (mqttClient.connected()) mqttClient.publish(mqttTopicPubSample, state==SampleState::SAMPLE ? MQTT_TOPIC_SWITCH_ON : MQTT_TOPIC_SWITCH_OFF);
+  if (mqtt.connected) mqtt.publish(mqttTopicPubSample, state==SampleState::SAMPLE ? MQTT_TOPIC_SWITCH_ON : MQTT_TOPIC_SWITCH_OFF);
 }

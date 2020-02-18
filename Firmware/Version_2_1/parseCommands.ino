@@ -354,7 +354,8 @@ void handleJSON() {
       docSend["msg"] = response;
       docSend["mqtt_server"] = address;
       docSend["error"] = false;
-      initMQTT();
+      mqtt.init(config.mqttServer, config.name);
+      mqtt.connect();
     } else {
       setBusyResponse();
       docSend["msg"] = response;
@@ -558,7 +559,7 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
       serializeJson(docSend, response);
       // This might be too long for the logger
       logger.log(response.c_str());
-      mqttClient.publish(mqttTopicPubInfo, response.c_str());
+      mqtt.publish(mqttTopicPubInfo, response.c_str());
     }
   } 
   // state request (like info)
@@ -571,7 +572,7 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
     response = "";
     serializeJson(docSend, response);
     logger.log(response.c_str());
-    mqttClient.publish(mqttTopicPubInfo, response.c_str());
+    mqtt.publish(mqttTopicPubInfo, response.c_str());
   }
   // single sample request
   else if(strcmp(topicEnd, MQTT_TOPIC_SAMPLE) == 0) {
@@ -606,7 +607,7 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
     response = "";
     serializeJson(docSend, response);
     logger.log(response.c_str());
-    mqttClient.publish(mqttTopicPubSample, response.c_str());
+    mqtt.publish(mqttTopicPubSample, response.c_str());
   }
   response = "";
   command[0] = '\0';
