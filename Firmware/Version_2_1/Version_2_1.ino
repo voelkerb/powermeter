@@ -113,7 +113,7 @@ SampleState next_state = SampleState::IDLE;
 MQTT mqtt;
 
 // Available measures are VOLTAGE+CURRENT, ACTIVE+REACTIVE Power or both
-enum class Measures{VI, PQ, VIPQ};
+enum class Measures{VI, PQ, VIPQ, VI_RMS};
 enum class StreamType{USB, TCP, UDP, TCP_RAW, MQTT};
 
 struct StreamConfig {
@@ -126,6 +126,8 @@ struct StreamConfig {
   uint32_t chunkSize = 0;                   // Chunksize of one packet sent
   IPAddress ip;                             // Ip address of data sink
   uint16_t port = STANDARD_TCP_SAMPLE_PORT; // Port of data sink
+  char unit[20] = {'\0'};                   // Units of current values
+  size_t numValues = 24/sizeof(float);      // Number of values
 };
 
 StreamConfig streamConfig;
@@ -146,7 +148,8 @@ WiFiClient streamClient;
 // tcp stuff is send over this client 
 // Init getter to point to sth, might not work otherwise
 Stream * newGetter = &Serial;
-
+// tcp stuff is send over this client 
+Stream * sendStream = (Stream*)&Serial;
 WiFiClient * sendClient;
 // UDP used for streaming
 WiFiUDP udpClient;
@@ -201,12 +204,15 @@ bool updating = false;
 char command[COMMAND_MAX_SIZE] = {'\0'};
 StaticJsonDocument<2*COMMAND_MAX_SIZE> docRcv;
 StaticJsonDocument<2*COMMAND_MAX_SIZE> docSend;
+StaticJsonDocument<COMMAND_MAX_SIZE> docSample;
 String response = "";
 
 
 char mqttTopicPubSwitch[MAX_MQTT_PUB_TOPIC_SWITCH+MAX_NAME_LEN] = {'\0'};
 char mqttTopicPubSample[MAX_MQTT_PUB_TOPIC_SAMPLE+MAX_NAME_LEN] = {'\0'};
 char mqttTopicPubInfo[MAX_MQTT_PUB_TOPIC_INFO+MAX_NAME_LEN] = {'\0'};
+
+void (*outputWriter)(bool) = &writeChunks;
 
 /************************ SETUP *************************/
 void setup() {
@@ -412,7 +418,8 @@ void onIdle() {
       streamConfig.measures = Measures::VI;
       streamConfig.ip = streamClient.remoteIP();
       streamConfig.port = STANDARD_TCP_SAMPLE_PORT;
-      sendClient = &streamClient;
+      sendClient = (WiFiClient*)&streamClient;
+      sendStream = sendClient;
       startSampling();
     }
   }
@@ -423,7 +430,7 @@ void onIdle() {
  ****************************************************/
 void onSampling() {
   // ______________ Send data to sink ________________
-  writeChunks(false);
+  outputWriter(false);
 
   // For error check during sampling
   if (sqwCounter) {
@@ -480,7 +487,12 @@ void onSampling() {
   } else if (streamConfig.stream == StreamType::TCP_RAW) {
     // Check for intended connection loss
     if (!sendClient->connected()) {
-      logger.log(INFO, "TCP Stream disconnected");
+      logger.log(INFO, "TCP Stream disconnected while streaming");
+      stopSampling();
+    }
+  } else if (streamConfig.stream == StreamType::MQTT) {
+    if (!mqtt.connected) {
+      logger.log(ERROR, "MQTT Server disconnected while streaming");
       stopSampling();
     }
   }
@@ -584,40 +596,34 @@ void onClientDisconnect(WiFiClient &oldClient, size_t i) {
   streamLog[i]->_stream = NULL;
 }
 
+
 /****************************************************
- * Write all remaining chunks of data over channel
+ * Write chunks of data for TCP and Serial
  * depending on data sink
  ****************************************************/
 void writeChunks(bool tail) {
   while(ringBuffer.available() > streamConfig.chunkSize) {
-    if (streamConfig.stream == StreamType::UDP) {
-      udpClient.beginPacket(streamConfig.ip, streamConfig.port);
-      writeData(udpClient, streamConfig.chunkSize);
-      udpClient.endPacket();
-    } else if (streamConfig.stream == StreamType::TCP) {
-      writeData(*sendClient, streamConfig.chunkSize);
-    } else if (streamConfig.stream == StreamType::TCP_RAW) {
-      writeData(*sendClient, streamConfig.chunkSize);
-    } else if (streamConfig.stream == StreamType::USB) {
-      writeData(Serial, streamConfig.chunkSize);
-    } else if (streamConfig.stream ==  StreamType::MQTT) {
-      writeDataMQTT(streamConfig.chunkSize);
-    }
+    writeData(*sendStream, streamConfig.chunkSize);
   }
   if (tail) {
-    if (streamConfig.stream == StreamType::UDP) {
-      udpClient.beginPacket(streamConfig.ip, streamConfig.port);
-      writeData(udpClient, ringBuffer.available());
-      udpClient.endPacket();
-    } else if (streamConfig.stream == StreamType::TCP) {
-      writeData(*sendClient, ringBuffer.available());
-    } else if (streamConfig.stream == StreamType::TCP_RAW) {
-      writeData(*sendClient, ringBuffer.available());
-    } else if (streamConfig.stream == StreamType::USB) {
-      writeData(Serial, ringBuffer.available());
-    } else if (streamConfig.stream ==  StreamType::MQTT) {
-      writeDataMQTT(streamConfig.chunkSize);
-    }
+    writeData(*sendStream, ringBuffer.available());
+  }
+}
+
+/****************************************************
+ * Write data via UDP, this requires special packet
+ * handling
+ ****************************************************/
+void writeChunksUDP(bool tail) {
+  while(ringBuffer.available() > streamConfig.chunkSize) {
+    udpClient.beginPacket(streamConfig.ip, streamConfig.port);
+    writeData(udpClient, streamConfig.chunkSize);
+    udpClient.endPacket();
+  }
+  if (tail) {
+    udpClient.beginPacket(streamConfig.ip, streamConfig.port);
+    writeData(udpClient, ringBuffer.available());
+    udpClient.endPacket();
   }
 }
 
@@ -625,14 +631,25 @@ void writeChunks(bool tail) {
  * Write data to mqtt sink, this requires special
  * formatiing of the data
  ****************************************************/
-void writeDataMQTT(uint16_t size) {
-  if (size <= 0) return;
-  size_t i = 0;
-  while (i < size) { 
-    i++;
+void writeDataMQTT(bool tail) {
+  if(ringBuffer.available() < streamConfig.measurementBytes) return;
+
+
+  while(ringBuffer.available() >= streamConfig.measurementBytes) {
+    ringBuffer.read((uint8_t*)&values[0], streamConfig.measurementBytes);
+    for (int i = 0; i < streamConfig.numValues; i++) docSample["values"][i] = values[i];
+    // JsonArray array = docSend["values"].to<JsonArray>();
+    // for (int i = 0; i < streamConfig.numValues; i++) array.add(value[i]);
+    // docSend["unit"] = streamConfig.unit;
+    docSample["ts"] = myTime.timeStr();
+    response = "";
+    serializeJson(docSample, response);
+    // logger.log(response.c_str());
+    mqtt.publish(mqttTopicPubInfo, response.c_str());
+    sentSamples++;
   }
-  logger.log(ERROR, "TODO implement");
 }
+
 
 /****************************************************
  * Write one chunk of data to sink.
@@ -707,6 +724,8 @@ void IRAM_ATTR sample_timer_task(void *param) {
       stpm34.readPower(1, (float*) &data[0], (float*) &data[2], (float*) &data[1], (float*) &data[2]);
     } else if (streamConfig.measures == Measures::VIPQ) {
       stpm34.readAll(1, (float*) &data[0], (float*) &data[1], (float*) &data[2], (float*) &data[3]);
+    } else if (streamConfig.measures == Measures::VI_RMS) {
+      stpm34.readRMSVoltageAndCurrent(1, (float*) &data[0], (float*) &data[1]);
     }
 
     ringBuffer.write((uint8_t*)&data[0], streamConfig.measurementBytes);

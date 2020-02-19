@@ -97,17 +97,20 @@ void handleJSON() {
         docSend["msg"] = response;
         return;
       }
-      if (measuresC == nullptr) {
+
+      streamConfig.measurementBytes = 8;
+      sprintf(streamConfig.unit, "V,mA");
+
+      if (measuresC == nullptr or strcmp(measuresC, "v,i") == 0) {
         streamConfig.measures = Measures::VI;
-        streamConfig.measurementBytes = 8;
-      } else if (strcmp(measuresC, "v,i") == 0) {
-        streamConfig.measures = Measures::VI;
-        streamConfig.measurementBytes = 8;
       } else if (strcmp(measuresC, "p,q") == 0) {
         streamConfig.measures = Measures::PQ;
-        streamConfig.measurementBytes = 8;
+        sprintf(streamConfig.unit, "W,VAR");
+      } else if (strcmp(measuresC, "v,i_RMS") == 0) {
+        streamConfig.measures = Measures::VI_RMS;
       } else if (strcmp(measuresC, "v,i,p,q") == 0) {
         streamConfig.measures = Measures::VIPQ;
+        sprintf(streamConfig.unit, "V,mA,W,VAR");
         streamConfig.measurementBytes = 16;
       } else {
         response = "Unsupported measures";
@@ -115,20 +118,36 @@ void handleJSON() {
         docSend["msg"] = response;
         return;
       }
+
+      streamConfig.numValues = streamConfig.measurementBytes/sizeof(float);
+      
+      
+      // Only important for MQTT sampling
+      JsonObject obj = docSample.to<JsonObject>();
+      obj.clear();
+      docSample["unit"] = streamConfig.unit;
+      JsonArray array = docSample["values"].to<JsonArray>();
+      for (int i = 0; i < streamConfig.numValues; i++) array.add(0.0f);
+      
       streamConfig.prefix = true;
+
       // If we do not want a prefix, we have to disable this if not at extra port
       if (!prefixVariant.isNull()) {
         streamConfig.prefix = prefix;
       }
+      outputWriter = &writeChunks;
       // e.g. {"cmd":"sample", "payload":{"type":"Serial", "rate":4000}}
       if (strcmp(typeC, "Serial") == 0) {
         streamConfig.stream = StreamType::USB;
+        sendStream = (Stream*)&Serial; 
       // e.g. {"cmd":"sample", "payload":{"type":"MQTT", "rate":4000}}
       } else if (strcmp(typeC, "MQTT") == 0) {
         streamConfig.stream = StreamType::MQTT;
+        outputWriter = &writeDataMQTT;
       // e.g. {"cmd":"sample", "payload":{"type":"TCP", "rate":4000}}
       } else if (strcmp(typeC, "TCP") == 0) {
-        sendClient = (WiFiClient*)newGetter; 
+        sendClient = (WiFiClient*)newGetter;
+        sendStream = sendClient; 
         streamConfig.stream = StreamType::TCP;
         streamConfig.port = STANDARD_TCP_SAMPLE_PORT;
         streamConfig.ip = sendClient->remoteIP();
@@ -145,7 +164,9 @@ void handleJSON() {
         } else {
           streamConfig.port = port;
         }
+        outputWriter = &writeChunksUDP;
         sendClient = (WiFiClient*)newGetter;
+        sendStream = sendClient; 
         docSend["port"] = streamConfig.port;
         streamConfig.ip = sendClient->remoteIP();
       } else if (strcmp(typeC, "FFMPEG") == 0) {
@@ -177,9 +198,11 @@ void handleJSON() {
       docSend["sampling_rate"] = streamConfig.samplingRate;
       docSend["chunk_size"] = streamConfig.chunkSize;
       docSend["conn_type"] = typeC;
+      docSend["measurements"] = streamConfig.numValues;
       docSend["prefix"] = streamConfig.prefix;
       docSend["timer_cycles"] = TIMER_CYCLES_FAST;
       docSend["cmd"] = CMD_SAMPLE;
+      docSend["unit"] = streamConfig.unit;
 
       relay.set(true);
 
@@ -242,7 +265,7 @@ void handleJSON() {
     // State is reset in stopSampling
     stopSampling();
     // Write remaining chunks with tail
-    writeChunks(true);
+    outputWriter(true);
     docSend["msg"] = F("Received stop command");
     docSend["sample_duration"] = samplingDuration;
     docSend["samples"] = totalSamples;
