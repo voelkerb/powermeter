@@ -114,7 +114,7 @@ MQTT mqtt;
 
 // Available measures are VOLTAGE+CURRENT, ACTIVE+REACTIVE Power or both
 enum class Measures{VI, PQ, VIPQ, VI_RMS};
-enum class StreamType{USB, TCP, UDP, TCP_RAW, MQTT};
+enum class StreamType{USB, TCP, UDP, MQTT};
 
 struct StreamConfig {
   bool prefix = false;                      // Send data with "data:" prefix
@@ -154,6 +154,8 @@ WiFiClient * sendClient;
 // UDP used for streaming
 WiFiUDP udpClient;
 
+// Stream client for external stream server
+WiFiClient exStreamServer;
 
 // Information about the current sampling period
 unsigned long samplingCountdown = 0;
@@ -298,12 +300,10 @@ void setup() {
   setInfoString(&command[0]);
   logger.log(&command[0]);
 
-  logger.log(ALL, "Setup done");
+  // Init send buffer
+  sprintf((char *)&sendbuffer[0], "%s", DATA_PREFIX);
 
-  lifenessUpdate = millis();
-  mdnsUpdate = millis();
-  tcpUpdate = millis();
-  rtcUpdate = millis();
+  logger.log(ALL, "Setup done");
 }
 
 /************************ Loop *************************/
@@ -390,6 +390,8 @@ void onIdle() {
   // TODO: no clue why, but does not work properly for esp32 (maybe it is the mac side)
   if ((long)(millis() - mdnsUpdate) >= 0) {
     mdnsUpdate += MDNS_UPDATE_INTERVAL;
+    // On long time no update, avoid multiupdate
+    if ((long)(millis() - mdnsUpdate) >= 0) mdnsUpdate = millis() + MDNS_UPDATE_INTERVAL; 
     // initMDNS();
     //MDNS.addService("_elec", "_tcp", STANDARD_TCP_STREAM_PORT);
   }
@@ -397,33 +399,59 @@ void onIdle() {
 
   if ((long)(millis() - rtcUpdate) >= 0) {
     rtcUpdate += RTC_UPDATE_INTERVAL;
+    // On long time no update, avoid multiupdate
+    if ((long)(millis() - rtcUpdate) >= 0) rtcUpdate = millis() + RTC_UPDATE_INTERVAL; 
     if (rtc.connected) rtc.update();
   }
     
   // Update lifeness only on idle every second
   if ((long)(millis() - lifenessUpdate) >= 0) {
     lifenessUpdate += LIFENESS_UPDATE_INTERVAL;
+    // On long time no update, avoid multiupdate
+    if ((long)(millis() - lifenessUpdate) >= 0) lifenessUpdate = millis() + LIFENESS_UPDATE_INTERVAL; 
     logger.log("");
   }
 
+  if (exStreamServer.connected()) {
+    // Set everything to default settings
+    standardConfig();
+    streamConfig.port = STANDARD_TCP_SAMPLE_PORT;
+    sendClient = (WiFiClient*)&exStreamServer;
+    sendStream = sendClient;
+    startSampling();
+  }
   // Look for people connecting over the stream server
   // If one connected there, immidiately start streaming data
   if (!streamClient.connected()) {
     streamClient = streamServer.available();
     if (streamClient.connected()) {
-      // Set everything to default settings
-      streamConfig.stream = StreamType::TCP_RAW;
+      standardConfig();
       streamConfig.prefix = false;
-      streamConfig.samplingRate = DEFAULT_SR;
-      streamConfig.measures = Measures::VI;
-      streamConfig.ip = streamClient.remoteIP();
-      streamConfig.port = STANDARD_TCP_SAMPLE_PORT;
+      streamConfig.port = STANDARD_TCP_STREAM_PORT;
       sendClient = (WiFiClient*)&streamClient;
       sendStream = sendClient;
       startSampling();
     }
   }
 }
+
+
+/****************************************************
+ * Set standard configuration
+ ****************************************************/
+void standardConfig() {
+  streamConfig.stream = StreamType::TCP;
+  streamConfig.prefix = true;
+  streamConfig.samplingRate = DEFAULT_SR;
+  streamConfig.measures = Measures::VI;
+  streamConfig.ip = streamClient.remoteIP();
+  streamConfig.port = STANDARD_TCP_SAMPLE_PORT;
+  outputWriter = &writeChunks;
+  streamConfig.measurementBytes = 8;
+  sprintf(streamConfig.unit, "V,mA");
+  streamConfig.numValues = streamConfig.measurementBytes/sizeof(float);
+}
+
 
 /****************************************************
  * What todo only on sampling (send data, etc)
@@ -483,13 +511,6 @@ void onSampling() {
       logger.log(ERROR, "TCP/UDP disconnected while streaming");
       stopSampling();
     }
-  // Disconnect of raw stream means stop
-  } else if (streamConfig.stream == StreamType::TCP_RAW) {
-    // Check for intended connection loss
-    if (!sendClient->connected()) {
-      logger.log(INFO, "TCP Stream disconnected while streaming");
-      stopSampling();
-    }
   } else if (streamConfig.stream == StreamType::MQTT) {
     if (!mqtt.connected) {
       logger.log(ERROR, "MQTT Server disconnected while streaming");
@@ -543,11 +564,7 @@ void onWifiConnect() {
   server.begin();
   streamServer.begin();
 
-  // Reset lifeness and MDNS update
-  lifenessUpdate = millis();
-  mdnsUpdate = millis();
-  tcpUpdate = millis();
-  rtcUpdate = millis();
+  initStreamServer();
 }
 
 /****************************************************
@@ -654,13 +671,12 @@ void writeDataMQTT(bool tail) {
 /****************************************************
  * Write one chunk of data to sink.
  ****************************************************/
-const char data_id[5] = {'D','a','t','a',':'};
 void writeData(Stream &getter, uint16_t size) {
   if (size <= 0) return;
   uint32_t start = 0;
   if (streamConfig.prefix) {
-    memcpy(&sendbuffer[start], (void*)&data_id[0], sizeof(data_id));
-    start += sizeof(data_id);
+    memcpy(&sendbuffer[start], (void*)&DATA_PREFIX[0], PREFIX_SIZE);
+    start += PREFIX_SIZE;
     memcpy(&sendbuffer[start], (void*)&size, sizeof(uint16_t));
     start += sizeof(uint16_t);
     memcpy(&sendbuffer[start], (void*)&packetNumber, sizeof(uint32_t));
@@ -672,6 +688,15 @@ void writeData(Stream &getter, uint16_t size) {
   // Everything is sent at once (hopefully)
   uint32_t sent = getter.write((uint8_t*)&sendbuffer[0], size+start);
   if (sent > start) sentSamples += (sent-start)/streamConfig.measurementBytes;
+}
+
+void test(bool tail) {
+  if (ringBuffer.available() > streamConfig.samplingRate*streamConfig.measurementBytes) {
+    ringBuffer.reset();
+    packetNumber++;
+    size_t test = sprintf((char*)&sendbuffer[0], "Test: %s - %u\r\n", timeStr(), packetNumber);
+    sendStream->write((uint8_t*)&sendbuffer[0], test);
+  }
 }
 
 /****************************************************
@@ -839,8 +864,6 @@ void stopSampling() {
   if (streamClient && streamClient.connected()) streamClient.stop();
   // Reset all variables
   streamConfig.countdown = 0;
-  lifenessUpdate = millis();
-  mdnsUpdate = millis();
   // If realy has toggled store its new value
   config.store();
   sampleCB();
@@ -972,6 +995,42 @@ void initMDNS() {
   MDNS.addService("_elec", "_tcp", STANDARD_TCP_STREAM_PORT);
 }
 
+/****************************************************
+ * Check streamserver connection, sicne connect is 
+ * a blocking task, we make it nonblocking using 
+ * a separate freerots task
+ ****************************************************/
+TaskHandle_t streamServerTaskHandle = NULL;
+void checkStreamServer(void * pvParameters) {
+  while (true) {
+    if (strcmp(config.streamServer, NO_SERVER) != 0 and !exStreamServer.connected()) {
+      exStreamServer.connect(config.streamServer, STANDARD_TCP_SAMPLE_PORT);
+    }
+    vTaskDelay(STREAM_SERVER_UPDATE_INTERVAL);
+  }
+  vTaskDelete(streamServerTaskHandle); // destroy this task 
+}
+
+/****************************************************
+ * Init an external server to which data is streamed 
+ * automatically if it is there. Enable checker 
+ ****************************************************/
+void initStreamServer() {
+  if (strcmp(config.streamServer, NO_SERVER) != 0 and !exStreamServer.connected()) {
+    logger.log("Try to connect Stream Server: %s", config.streamServer);
+    exStreamServer.connect(config.streamServer, STANDARD_TCP_SAMPLE_PORT);
+    // Handle reconnects
+    if (streamServerTaskHandle == NULL) {
+      xTaskCreate(
+            checkStreamServer,   /* Function to implement the task */
+            "streamServerTask", /* Name of the task */
+            10000,      /* Stack size in words */
+            NULL,       /* Task input parameter */
+            1,          /* Priority of the task */
+            &streamServerTaskHandle);  /* Task handle */
+    }
+  }
+}
 
 /****************************************************
  * Subscribe to the mqtt topics we want to listen

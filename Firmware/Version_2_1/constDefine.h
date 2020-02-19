@@ -19,11 +19,11 @@
 // Location time difference between us (Freiburg, Germany) and NTP time 
 #define LOCATION_TIME_OFFSET 3600//7200 // 2 hours or (2*60*60)
 
-#define MQTT_UPDATE_INTERVAL 10000
 #define MDNS_UPDATE_INTERVAL 30000
 #define TCP_UPDATE_INTERVAL 100
 #define LIFENESS_UPDATE_INTERVAL 1000
 #define RTC_UPDATE_INTERVAL 30000
+#define STREAM_SERVER_UPDATE_INTERVAL 30000
 
 // We allow a max of 3 tcp clients for performance reasons
 #define MAX_CLIENTS 3
@@ -34,6 +34,9 @@ const char* ntpServerName = "time.uni-freiburg.de";//"0.de.pool.ntp.org";
 
 const char LOG_PREFIX_SERIAL[] = "";
 const char LOG_PREFIX[] = "Info:";
+
+const char DATA_PREFIX[] = "Data:";
+const size_t PREFIX_SIZE = strlen(DATA_PREFIX); 
 
 // Pin definitions
 // Red error led for first flash
@@ -61,6 +64,7 @@ const int RTC_RST = 32;
 const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define COMMAND_MAX_SIZE 500
 
+
 // Communication commands
 #define CMD_SAMPLE "sample"
 #define CMD_SWITCH "switch"
@@ -75,6 +79,7 @@ const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define CMD_CLEAR_LOG "clearLog"
 #define CMD_GET_LOG "getLog"
 #define CMD_MQTT_SERVER "mqttServer"
+#define CMD_STREAM_SERVER "streamServer"
 
 #define MQTT_TOPIC_BASE "powermeter"
 #define MQTT_TOPIC_SEPARATOR '/'
