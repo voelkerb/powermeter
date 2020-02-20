@@ -16,6 +16,7 @@
 #include <PubSubClient.h>
 
 #include "constDefine.h"
+#include "enums.h"
 #include "src/logger/logger.h"
 #include "src/stpm/STPM.h"
 #include "src/relay/relay.h"
@@ -25,37 +26,10 @@
 #include "src/time/timeHandling.h"
 #include "src/ringbuffer/ringbuffer.h"
 #include "src/mqtt/mqtt.h"
-// #include "parseCommands.ino"
-
-
 
 // Function prototypes required for e.g. platformio
-void calcChunkSize();
-bool getTimeNTP();
-void handleEvent(Stream &getter);
-void handleJSON();
-void initMDNS();
-void onIdle();
-void onSampling();
-void onWifiConnect();
-void onWifiDisconnect();
-char * printCurrentTime();
-char * printDuration(unsigned long ms);
-char * printTime(unsigned long s, unsigned long ms);
 void IRAM_ATTR sample_ISR();
-void setInfoString(char * str);
-void setupOTA();
 void IRAM_ATTR sqwvTriggered();
-inline void startSampling();
-void startSampling(bool waitVoltage);
-void stopSampling();
-void timer_init();
-void turnInterrupt(bool on);
-void updateTime(bool ntp);
-void updateTimeInBG(void * pvParameters);
-void writeChunks(bool tail);
-void writeData(Stream &getter, uint16_t size);
-char * timeStr();
 
 TaskHandle_t xHandle = NULL;
 
@@ -73,7 +47,7 @@ Configuration config;
 Relay relay(RELAY_PIN_S, RELAY_PIN_R);
 
 Rtc rtc(RTC_INT);
-TimeHandler myTime(&rtc, ntpServerName, LOCATION_TIME_OFFSET);
+TimeHandler myTime(ntpServerName, LOCATION_TIME_OFFSET, &rtc);
 
 // STPM Object
 STPM stpm34(STPM_RES, STPM_CS, STPM_SYN);
@@ -103,18 +77,11 @@ volatile uint32_t timer_next;
 volatile uint32_t timer_now;
 
 
-// Internal state machine for sampling
-enum class SampleState{IDLE, SAMPLE};
-
 SampleState state = SampleState::IDLE;
 SampleState next_state = SampleState::IDLE;
 
 // Define it before StreamType enum redefines it
 MQTT mqtt;
-
-// Available measures are VOLTAGE+CURRENT, ACTIVE+REACTIVE Power or both
-enum class Measures{VI, PQ, VIPQ, VI_RMS};
-enum class StreamType{USB, TCP, UDP, MQTT};
 
 struct StreamConfig {
   bool prefix = false;                      // Send data with "data:" prefix
@@ -126,9 +93,11 @@ struct StreamConfig {
   uint32_t chunkSize = 0;                   // Chunksize of one packet sent
   IPAddress ip;                             // Ip address of data sink
   uint16_t port = STANDARD_TCP_SAMPLE_PORT; // Port of data sink
-  char unit[20] = {'\0'};                   // Units of current values
   size_t numValues = 24/sizeof(float);      // Number of values
 };
+
+char measureStr[20] = {'\0'};
+char unitStr[20] = {'\0'};
 
 StreamConfig streamConfig;
 
@@ -348,13 +317,13 @@ void onIdleOrSampling() {
 
   // Handle serial requests
   if (Serial.available()) {
-    handleEvent(Serial);
+    handleEvent(&Serial);
   }
 
   // Handle tcp requests
   for (size_t i = 0; i < MAX_CLIENTS; i++) {
     if (client[i].available() > 0) {
-      handleEvent(client[i]);
+      handleEvent(&client[i]);
     }
   }
 
@@ -418,6 +387,7 @@ void onIdle() {
     streamConfig.port = STANDARD_TCP_SAMPLE_PORT;
     sendClient = (WiFiClient*)&exStreamServer;
     sendStream = sendClient;
+    sendStreamInfo(sendClient);
     startSampling();
   }
   // Look for people connecting over the stream server
@@ -435,6 +405,72 @@ void onIdle() {
   }
 }
 
+/****************************************************
+ * Send Stream info to 
+ ****************************************************/
+void sendStreamInfo(Stream * sender) {
+  JsonObject obj = docSend.to<JsonObject>();
+  obj.clear();
+  docSend["name"] = config.name;
+  docSend["measures"] = measuresToStr(streamConfig.measures);
+  docSend["chunksize"] = streamConfig.chunkSize;
+  docSend["samplingrate"] = streamConfig.samplingRate;
+  docSend["measurements"] = streamConfig.numValues;
+  docSend["prefix"] = streamConfig.prefix;
+  docSend["cmd"] = CMD_SAMPLE;
+  docSend["unit"] = unitToStr(streamConfig.measures);
+  response = "";
+  serializeJson(docSend, response);
+  response = LOG_PREFIX + response;
+  sender->println(response);
+}
+
+/****************************************************
+ * return unit as str
+ ****************************************************/
+char * unitToStr(Measures measures) {
+  switch (measures) {
+    case Measures::VI:
+    case Measures::VI_RMS:
+      sprintf(unitStr, UNIT_VI);
+      break;
+    case Measures::PQ:
+      sprintf(unitStr, UNIT_PQ);
+      break;
+    case Measures::VIPQ:
+      sprintf(unitStr, UNIT_VIPQ);
+      break;
+    default:
+      sprintf(unitStr, "unknown");
+      break;
+  }
+  return &unitStr[0];
+}
+
+/****************************************************
+ * Convert measure to str
+ ****************************************************/
+char * measuresToStr(Measures measures) {
+  switch (measures) {
+    case Measures::VI:
+      sprintf(measureStr, MEASURE_VI);
+      break;
+    case Measures::PQ:
+      sprintf(measureStr, MEASURE_PQ);
+      break;
+    case Measures::VI_RMS:
+      sprintf(measureStr, MEASURE_VI_RMS);
+      break;
+    case Measures::VIPQ:
+      sprintf(measureStr, MEASURE_VIPQ);
+      break;
+    default:
+      sprintf(measureStr, "unknown");
+      break;
+  }
+  return &measureStr[0];
+}
+
 
 /****************************************************
  * Set standard configuration
@@ -448,8 +484,8 @@ void standardConfig() {
   streamConfig.port = STANDARD_TCP_SAMPLE_PORT;
   outputWriter = &writeChunks;
   streamConfig.measurementBytes = 8;
-  sprintf(streamConfig.unit, "V,mA");
   streamConfig.numValues = streamConfig.measurementBytes/sizeof(float);
+  calcChunkSize();
 }
 
 
@@ -651,17 +687,23 @@ void writeChunksUDP(bool tail) {
 void writeDataMQTT(bool tail) {
   if(ringBuffer.available() < streamConfig.measurementBytes) return;
 
+  // May be the most inefficient way to do it 
+  // TODO: Improve this
 
   while(ringBuffer.available() >= streamConfig.measurementBytes) {
+
+    JsonObject objSample = docSample.to<JsonObject>();
+    objSample.clear();
+    objSample["unit"] = unitStr;
+    objSample["ts"] = myTime.timestampString();
     ringBuffer.read((uint8_t*)&values[0], streamConfig.measurementBytes);
-    for (int i = 0; i < streamConfig.numValues; i++) docSample["values"][i] = values[i];
     // JsonArray array = docSend["values"].to<JsonArray>();
-    // for (int i = 0; i < streamConfig.numValues; i++) array.add(value[i]);
-    // docSend["unit"] = streamConfig.unit;
-    docSample["ts"] = myTime.timeStr();
+    // for (int i = 0; i < streamConfig.numValues; i++) objSample["values"][i] = values[i];
+    JsonArray array = objSample["values"].to<JsonArray>();
+    for (int i = 0; i < streamConfig.numValues; i++) array.add(values[i]);
     response = "";
     serializeJson(docSample, response);
-    // logger.log(response.c_str());
+    logger.log(response.c_str());
     mqtt.publish(mqttTopicPubInfo, response.c_str());
     sentSamples++;
   }
@@ -1003,7 +1045,10 @@ void initMDNS() {
 TaskHandle_t streamServerTaskHandle = NULL;
 void checkStreamServer(void * pvParameters) {
   while (not updating) {
-    if (strcmp(config.streamServer, NO_SERVER) != 0 and !exStreamServer.connected()) {
+    if (!exStreamServer.connected()                         // If not already connected
+        and state == SampleState::IDLE                      // and in idle mode
+        and Network::connected and not Network::apMode      // Network is STA mode
+        and strcmp(config.streamServer, NO_SERVER) != 0) {  // and server is set
       exStreamServer.connect(config.streamServer, STANDARD_TCP_SAMPLE_PORT);
     }
     vTaskDelay(STREAM_SERVER_UPDATE_INTERVAL);

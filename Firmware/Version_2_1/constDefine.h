@@ -65,6 +65,17 @@ const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define COMMAND_MAX_SIZE 500
 
 
+#define MEASURE_VI "v,i"
+#define MEASURE_PQ "p,q"
+#define MEASURE_VI_RMS "v,i_RMS"
+#define MEASURE_VIPQ "v,i,p,q"
+
+
+#define UNIT_VI "V,mA"
+#define UNIT_PQ "W,VAR"
+#define UNIT_VIPQ "V,mA,W,VAR"
+
+
 // Communication commands
 #define CMD_SAMPLE "sample"
 #define CMD_SWITCH "switch"
@@ -80,6 +91,7 @@ const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define CMD_GET_LOG "getLog"
 #define CMD_MQTT_SERVER "mqttServer"
 #define CMD_STREAM_SERVER "streamServer"
+
 
 #define MQTT_TOPIC_BASE "powermeter"
 #define MQTT_TOPIC_SEPARATOR '/'

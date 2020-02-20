@@ -1,19 +1,19 @@
 /****************************************************
  * A request happended, handle it
  ****************************************************/
-void handleEvent(Stream &getter) {
-  if (!getter.available()) return;
-  getter.readStringUntil('\n').toCharArray(command,COMMAND_MAX_SIZE);
+void handleEvent(Stream * getter) {
+  if (!getter->available()) return;
+  getter->readStringUntil('\n').toCharArray(command,COMMAND_MAX_SIZE);
   // Be backwards compatible to "?" command all the time
   if (command[0] == '?') {
-    getter.println(F("Info:Setup done"));
+    getter->println(F("Info:Setup done"));
     return;
   }
   #ifdef DEBUG_DEEP
   logger.log(INFO, command);
   #endif
 
-  newGetter = (Stream*)&getter;
+  newGetter = getter;
 
   response = "";
 
@@ -21,11 +21,11 @@ void handleEvent(Stream &getter) {
   handleJSON();
 
   if (docSend.isNull() == false) {
-    getter.flush();
+    getter->flush();
     response = "";
     serializeJson(docSend, response);
-    response = "Info:" + response;
-    getter.println(response);
+    response = LOG_PREFIX + response;
+    getter->println(response);
     // This will be too long for the logger
     // logger.log(response.c_str());
   }
@@ -99,18 +99,15 @@ void handleJSON() {
       }
 
       streamConfig.measurementBytes = 8;
-      sprintf(streamConfig.unit, "V,mA");
 
-      if (measuresC == nullptr or strcmp(measuresC, "v,i") == 0) {
+      if (measuresC == nullptr or strcmp(measuresC, MEASURE_VI) == 0) {
         streamConfig.measures = Measures::VI;
-      } else if (strcmp(measuresC, "p,q") == 0) {
+      } else if (strcmp(measuresC, MEASURE_PQ) == 0) {
         streamConfig.measures = Measures::PQ;
-        sprintf(streamConfig.unit, "W,VAR");
-      } else if (strcmp(measuresC, "v,i_RMS") == 0) {
+      } else if (strcmp(measuresC, MEASURE_VI_RMS) == 0) {
         streamConfig.measures = Measures::VI_RMS;
-      } else if (strcmp(measuresC, "v,i,p,q") == 0) {
+      } else if (strcmp(measuresC, MEASURE_VIPQ) == 0) {
         streamConfig.measures = Measures::VIPQ;
-        sprintf(streamConfig.unit, "V,mA,W,VAR");
         streamConfig.measurementBytes = 16;
       } else {
         response = "Unsupported measures";
@@ -123,11 +120,11 @@ void handleJSON() {
       
       
       // Only important for MQTT sampling
-      JsonObject obj = docSample.to<JsonObject>();
-      obj.clear();
-      docSample["unit"] = streamConfig.unit;
-      JsonArray array = docSample["values"].to<JsonArray>();
-      for (int i = 0; i < streamConfig.numValues; i++) array.add(0.0f);
+      // JsonObject obj = docSample.to<JsonObject>();
+      // obj.clear();
+      // docSample["unit"] = unitToStr(streamConfig.measures);
+      // JsonArray array = docSample["values"].to<JsonArray>();
+      // for (int i = 0; i < streamConfig.numValues; i++) array.add(0.0f);
       
       streamConfig.prefix = true;
 
@@ -192,17 +189,15 @@ void handleJSON() {
       // Set global sampling variable
       streamConfig.samplingRate = rate;
       TIMER_CYCLES_FAST = (1000000) / streamConfig.samplingRate; // Cycles between HW timer inerrupts
-      calcChunkSize();
-
-
-      docSend["sampling_rate"] = streamConfig.samplingRate;
-      docSend["chunk_size"] = streamConfig.chunkSize;
+      calcChunkSize();      
+      docSend["measures"] = measuresToStr(streamConfig.measures);
+      docSend["chunksize"] = streamConfig.chunkSize;
+      docSend["samplingrate"] = streamConfig.samplingRate;
       docSend["conn_type"] = typeC;
       docSend["measurements"] = streamConfig.numValues;
       docSend["prefix"] = streamConfig.prefix;
-      docSend["timer_cycles"] = TIMER_CYCLES_FAST;
       docSend["cmd"] = CMD_SAMPLE;
-      docSend["unit"] = streamConfig.unit;
+      docSend["unit"] = unitToStr(streamConfig.measures);
 
       relay.set(true);
 
@@ -262,6 +257,7 @@ void handleJSON() {
   /*********************** STOP COMMAND ****************************/
   // e.g. {"cmd":"stop"}
   else if (strcmp(cmd, CMD_STOP) == 0) {
+    if (state == SampleState::IDLE) return;
     // State is reset in stopSampling
     stopSampling();
     // Write remaining chunks with tail
