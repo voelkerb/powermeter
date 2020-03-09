@@ -47,7 +47,7 @@ Configuration config;
 Relay relay(RELAY_PIN_S, RELAY_PIN_R);
 
 Rtc rtc(RTC_INT);
-TimeHandler myTime(ntpServerName, LOCATION_TIME_OFFSET, &rtc);
+TimeHandler myTime(config.timeServer, LOCATION_TIME_OFFSET, &rtc);
 
 // STPM Object
 STPM stpm34(STPM_RES, STPM_CS, STPM_SYN);
