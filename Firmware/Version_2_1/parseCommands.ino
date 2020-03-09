@@ -427,11 +427,11 @@ void handleJSON() {
         docSend["msg"] = F("StreamServer address required in payload with key server");
         return;
       }
-      if (strlen(newServer) < MAX_IP_LEN) {
+      if (strlen(newServer) < MAX_DNS_LEN) {
         config.setTimeServerAddress((char * )newServer);
       } else {
         response = F("TimeServer address too long, only string of size ");
-        response += MAX_IP_LEN;
+        response += MAX_DNS_LEN;
         response += F(" allowed");
         docSend["msg"] = response;
         return;
