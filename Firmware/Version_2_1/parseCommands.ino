@@ -207,6 +207,9 @@ void handleJSON() {
       if (ts != 0) {
         response += F("Should sample at: ");
         response += myTime.timeStr(ts, 0);
+        // Wait random time to start ntp update s.t. not all devices start ntp request at the same time
+        int waitMillis = random(200);
+        delay(waitMillis);
         // Update ntp time actively wait for finish
         myTime.updateNTPTime(true);
         uint32_t delta = ts - myTime.utc_seconds();
