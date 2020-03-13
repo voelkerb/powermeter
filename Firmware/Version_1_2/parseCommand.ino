@@ -278,7 +278,7 @@ void handleJSON() {
     docSend["sys_time"] = myTime.timeStr();
     docSend["name"] = config.name;
     docSend["ip"] = WiFi.localIP().toString();
-    docSend["mqtt_server"] = config.mqtt_server;
+    docSend["mqtt_server"] = config.mqttServer;
     docSend["sampling_rate"] = streamConfig.samplingRate;
     docSend["buffer_size"] = ringBuffer.getSize();
     docSend["state"] = state != STATE_IDLE ? "busy" : "idle";
@@ -344,7 +344,7 @@ void handleJSON() {
         docSend["msg"] = response;
         return;
       }
-      char * address = config.mqtt_server;
+      char * address = config.mqttServer;
       response = F("Set MQTTServer address to: ");
       response += address;
       //docSend["msg"] = sprintf( %s", name);
@@ -563,7 +563,7 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
     JsonObject obj = docSend.to<JsonObject>();
     obj.clear();
     docSend["relay"] = relay.state ? "on" : "off";
-    docSend["sampleState"] = state == SampleState::IDLE ? "idle" : "sampling";
+    docSend["sampleState"] = state == STATE_IDLE ? "idle" : "sampling";
     docSend["ts"] = myTime.timeStr();
     response = "";
     serializeJson(docSend, response);
