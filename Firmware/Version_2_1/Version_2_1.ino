@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <WiFiAP.h>
 #include <time.h>
+#include <math.h>
 #include <ArduinoJson.h>
 #include <TimeLib.h>
 #include <ESPmDNS.h>
@@ -139,6 +140,7 @@ long lifenessUpdate = millis();
 long mdnsUpdate = millis();
 long tcpUpdate = millis();
 long rtcUpdate = millis();
+long mqttUpdate = millis();
 
 // HW Timer and mutex for sapmpling ISR
 hw_timer_t * timer = NULL;
@@ -381,6 +383,16 @@ void onIdle() {
     logger.log("");
   }
 
+  // Update stuff over mqtt
+  if (mqtt.connected) {
+    if ((long)(millis() - mqttUpdate) >= 0) {
+      mqttUpdate += MQTT_UPDATE_INTERVAL;
+      // On long time no update, avoid multiupdate
+      if ((long)(millis() - mqttUpdate) >= 0) mqttUpdate = millis() + MQTT_UPDATE_INTERVAL; 
+      sendStatusMQTT();
+    }
+  }
+  
   if (exStreamServer.connected()) {
     // Set everything to default settings
     standardConfig();
@@ -403,6 +415,38 @@ void onIdle() {
       startSampling();
     }
   }
+}
+
+/****************************************************
+ * Send Status info over mqtt 
+ ****************************************************/
+void sendStatusMQTT() {
+  JsonObject obj = docSend.to<JsonObject>();
+  obj.clear();
+  float value = 0.0;
+  if (!relay.state) {
+    docSend["power"] = 0.0;
+    docSend["current"] = 0.0;
+    docSend["inUse"] =  false;
+  } else {
+    value = round2<float>(stpm34.readActivePower(1));
+    docSend["power"] = value;
+    docSend["inUse"] = value > 2.0 ? true : false;
+    // We want current in A
+    value = round2<float>(stpm34.readRMSCurrent(1)/1000.0);
+    docSend["current"] = value;
+  }
+  // unit is watt hours and we want kwh
+  value = round2<float>(stpm34.readActiveEnergy(1)/1000.0);
+  docSend["energy"] = value;
+  // Something is still wrong with voltage calculation
+  value = round2<float>(stpm34.readRMSVoltage(1)+230.0);
+  docSend["volt"] = value;
+  docSend["ts"] = myTime.timestampString(true);
+  response = "";
+  serializeJson(docSend, response);
+  logger.log("MQTT msg: %s", response.c_str());
+  mqtt.publish(mqttTopicPubSample, response.c_str());
 }
 
 /****************************************************
@@ -644,7 +688,7 @@ void onClientConnect(WiFiClient &newClient) {
  * We must remove the logger
  ****************************************************/
 void onClientDisconnect(WiFiClient &oldClient, size_t i) {
-  logger.log("Client discconnected %s port %u", oldClient.remoteIP().toString().c_str(), oldClient.remotePort());
+  logger.log("Client disconnected %s port %u", oldClient.remoteIP().toString().c_str(), oldClient.remotePort());
   logger.removeLogger(streamLog[i]);
   streamLog[i]->_stream = NULL;
 }
@@ -1154,6 +1198,7 @@ void relayCB(bool value) {
     config.setRelayState(value); 
   }
   if (mqtt.connected) mqtt.publish(mqttTopicPubSwitch, value ? MQTT_TOPIC_SWITCH_ON : MQTT_TOPIC_SWITCH_OFF);
+  if (mqtt.connected) mqtt.publish(mqttTopicPubSwitch, value ? TRUE_STRING : FALSE_STRING);
   logger.log("Switched %s", value ? "on" : "off");
 }
 

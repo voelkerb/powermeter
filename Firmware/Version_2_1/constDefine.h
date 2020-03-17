@@ -24,6 +24,7 @@
 #define LIFENESS_UPDATE_INTERVAL 1000
 #define RTC_UPDATE_INTERVAL 30000
 #define STREAM_SERVER_UPDATE_INTERVAL 30000
+#define MQTT_UPDATE_INTERVAL 5000
 
 // We allow a max of 3 tcp clients for performance reasons
 #define MAX_CLIENTS 3
@@ -103,6 +104,15 @@ const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define MQTT_TOPIC_CMD "cmd"
 #define MQTT_TOPIC_INFO "info"
 
+#define TRUE_STRING "true"
+#define FALSE_STRING "false"
+
 const int MAX_MQTT_PUB_TOPIC_SWITCH = sizeof(MQTT_TOPIC_BASE) + sizeof(MQTT_TOPIC_STATE) + sizeof(MQTT_TOPIC_SWITCH) + 4*sizeof(MQTT_TOPIC_SEPARATOR) + 2;
 const int MAX_MQTT_PUB_TOPIC_SAMPLE = sizeof(MQTT_TOPIC_BASE) + sizeof(MQTT_TOPIC_STATE) + sizeof(MQTT_TOPIC_SAMPLE) + 4*sizeof(MQTT_TOPIC_SEPARATOR) + 2;
 const int MAX_MQTT_PUB_TOPIC_INFO = sizeof(MQTT_TOPIC_BASE) + sizeof(MQTT_TOPIC_STATE) + sizeof(MQTT_TOPIC_INFO) + 4*sizeof(MQTT_TOPIC_SEPARATOR) + 2;
+
+
+template < typename TOut, typename TIn >
+TOut round2( TIn value ) {
+   return static_cast<TOut>((int)(value * 100 + 0.5) / 100.0);
+}

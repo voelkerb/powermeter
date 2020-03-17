@@ -464,7 +464,7 @@ void handleJSON() {
         docSend["msg"] = F("WiFi SSID and PWD required, for open networks, fill empty pwd");
         return;
       }
-      bool success = false;
+      int success = 0;
       if (strlen(newSSID) < MAX_SSID_LEN and strlen(newPWD) < MAX_PWD_LEN) {
         success = config.addWiFi((char * )newSSID, (char * )newPWD);
       } else {
@@ -475,7 +475,7 @@ void handleJSON() {
         docSend["msg"] = response;
         return;
       }
-      if (success)  {
+      if (success == 1)  {
         char * name = config.wifiSSIDs[config.numAPs-1];
         char * pwd = config.wifiPWDs[config.numAPs-1];
         response = F("New Ap, SSID: ");
@@ -486,6 +486,10 @@ void handleJSON() {
         docSend["ssid"] = name;
         docSend["pwd"] = pwd;
         docSend["error"] = false;
+      } else if (success == -1) {
+        response = F("Wifi AP ");
+        response += newSSID;
+        response += F(" already in list");
       } else {
         response = F("MAX # APs reached, need to delete first");
       }
@@ -637,6 +641,10 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
       relay.set(false);
     } else if(strcmp(command, MQTT_TOPIC_SWITCH_ON) == 0) {
       relay.set(true);
+    } else if(strcmp(command, TRUE_STRING) == 0) {
+      relay.set(true);
+    } else if(strcmp(command, FALSE_STRING) == 0) {
+      relay.set(false);
     }
   }
   // cmd request
