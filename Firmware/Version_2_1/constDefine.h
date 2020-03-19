@@ -58,7 +58,7 @@ const int RTC_RST = 32;
 
 
 // Buffering stuff
-#define MAX_SEND_SIZE 512 // 1024
+#define MAX_SEND_SIZE 1024
 // PSRAM Buffer
 const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define COMMAND_MAX_SIZE 500

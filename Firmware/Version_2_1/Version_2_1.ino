@@ -95,6 +95,8 @@ struct StreamConfig {
   IPAddress ip;                             // Ip address of data sink
   uint16_t port = STANDARD_TCP_SAMPLE_PORT; // Port of data sink
   size_t numValues = 24/sizeof(float);      // Number of values
+  Timestamp startTs;
+  Timestamp stopTs;
 };
 
 char measureStr[20] = {'\0'};
@@ -145,7 +147,7 @@ long mqttUpdate = millis();
 // HW Timer and mutex for sapmpling ISR
 hw_timer_t * timer = NULL;
 portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
-
+SemaphoreHandle_t stpm_mutex;
 // Current CPU speed
 unsigned int coreFreq = 0;
 
@@ -246,6 +248,7 @@ void setup() {
 
   timer_init();
 
+  stpm_mutex = xSemaphoreCreateMutex();
   // Setup STPM 32
   success = stpm34.init();
   if (!success) logger.log(ERROR, "STPM Init Failed");
@@ -317,6 +320,16 @@ void onIdleOrSampling() {
   // MQTT loop
   mqtt.update();
 
+  // Update stuff over mqtt
+  if (mqtt.connected()) {
+    if ((long)(millis() - mqttUpdate) >= 0) {
+      mqttUpdate += MQTT_UPDATE_INTERVAL;
+      // On long time no update, avoid multiupdate
+      if ((long)(millis() - mqttUpdate) >= 0) mqttUpdate = millis() + MQTT_UPDATE_INTERVAL; 
+      sendStatusMQTT();
+    }
+  }
+
   // Handle serial requests
   if (Serial.available()) {
     handleEvent(&Serial);
@@ -363,7 +376,7 @@ void onIdle() {
     mdnsUpdate += MDNS_UPDATE_INTERVAL;
     // On long time no update, avoid multiupdate
     if ((long)(millis() - mdnsUpdate) >= 0) mdnsUpdate = millis() + MDNS_UPDATE_INTERVAL; 
-    // initMDNS();
+      // initMDNS();
     //MDNS.addService("_elec", "_tcp", STANDARD_TCP_STREAM_PORT);
   }
   
@@ -381,16 +394,6 @@ void onIdle() {
     // On long time no update, avoid multiupdate
     if ((long)(millis() - lifenessUpdate) >= 0) lifenessUpdate = millis() + LIFENESS_UPDATE_INTERVAL; 
     logger.log("");
-  }
-
-  // Update stuff over mqtt
-  if (mqtt.connected) {
-    if ((long)(millis() - mqttUpdate) >= 0) {
-      mqttUpdate += MQTT_UPDATE_INTERVAL;
-      // On long time no update, avoid multiupdate
-      if ((long)(millis() - mqttUpdate) >= 0) mqttUpdate = millis() + MQTT_UPDATE_INTERVAL; 
-      sendStatusMQTT();
-    }
   }
   
   if (exStreamServer.connected()) {
@@ -424,6 +427,9 @@ void sendStatusMQTT() {
   JsonObject obj = docSend.to<JsonObject>();
   obj.clear();
   float value = 0.0;
+  // Lock stpm before using it
+  xSemaphoreTake(stpm_mutex, portMAX_DELAY);
+
   if (!relay.state) {
     docSend["power"] = 0.0;
     docSend["current"] = 0.0;
@@ -441,11 +447,15 @@ void sendStatusMQTT() {
   docSend["energy"] = value;
   // Something is still wrong with voltage calculation
   value = round2<float>(stpm34.readRMSVoltage(1)+230.0);
+
+  // Unlock stpm 
+  xSemaphoreGive(stpm_mutex);
+
   docSend["volt"] = value;
-  docSend["ts"] = myTime.timestampString(true);
+  docSend["ts"] = myTime.timestampStr(true);
   response = "";
   serializeJson(docSend, response);
-  logger.log("MQTT msg: %s", response.c_str());
+  // logger.log("MQTT msg: %s", response.c_str());
   mqtt.publish(mqttTopicPubSample, response.c_str());
 }
 
@@ -592,7 +602,7 @@ void onSampling() {
       stopSampling();
     }
   } else if (streamConfig.stream == StreamType::MQTT) {
-    if (!mqtt.connected) {
+    if (!mqtt.connected()) {
       logger.log(ERROR, "MQTT Server disconnected while streaming");
       stopSampling();
     }
@@ -630,15 +640,16 @@ void onWifiConnect() {
   if (not Network::apMode) {
     logger.log(ALL, "Wifi Connected");
     logger.log(ALL, "IP: %s", WiFi.localIP().toString().c_str());
+    // Reinit mdns
+    initMDNS();
     // The stuff todo if we have a network connection (and hopefully internet as well)
     myTime.updateNTPTime();
+    mqttUpdate = millis() + MQTT_UPDATE_INTERVAL;
     if (!mqtt.connect()) logger.log(ERROR, "Cannot connect to MQTT Server %s", mqtt.ip);
   } else {
     logger.log(ALL, "Network AP Opened");
   }
 
-  // Reinit mdns
-  initMDNS();
 
   // Start the TCP server
   server.begin();
@@ -657,7 +668,7 @@ void onWifiDisconnect() {
     logger.log(ERROR, "Stop sampling (Wifi disconnect)");
     stopSampling();
   }
-  if (mqtt.connected) mqtt.disconnect();
+  if (mqtt.connected()) mqtt.disconnect();
 }
 
 /****************************************************
@@ -739,7 +750,7 @@ void writeDataMQTT(bool tail) {
     JsonObject objSample = docSample.to<JsonObject>();
     objSample.clear();
     objSample["unit"] = unitStr;
-    objSample["ts"] = myTime.timestampString();
+    objSample["ts"] = myTime.timestampStr();
     ringBuffer.read((uint8_t*)&values[0], streamConfig.measurementBytes);
     // JsonArray array = docSend["values"].to<JsonArray>();
     // for (int i = 0; i < streamConfig.numValues; i++) objSample["values"][i] = values[i];
@@ -816,6 +827,8 @@ void IRAM_ATTR sample_timer_task(void *param) {
     // if (test%100 == 0) {
     //   Serial.println(micros()-mytime);
     // }
+    // Lock stpm before using it
+    xSemaphoreTake(stpm_mutex, portMAX_DELAY);
     
     // Vaiables for frequency count
     counter++;
@@ -840,6 +853,8 @@ void IRAM_ATTR sample_timer_task(void *param) {
     }
 
     ringBuffer.write((uint8_t*)&data[0], streamConfig.measurementBytes);
+    // Unlock stpm 
+    xSemaphoreGive(stpm_mutex);
 
   }
   vTaskDelete( NULL );
@@ -906,28 +921,28 @@ void setupOTA() {
     streamServer.close();
     server.stop();
     server.close();
+    mqtt.disconnect();
   });
 
   ArduinoOTA.onEnd([]() {
-    logger.log("End");
+    Serial.println("End");
   });
 
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
     unsigned int percent = (progress / (total / 100));
     if (percent != oldPercent) {
-      logger.log("Progress: %u%%\r", (progress / (total / 100)));
+      Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
       oldPercent = percent;
     }
   });
   
   ArduinoOTA.onError([](ota_error_t error) {
-    logger.append("Error[%u]: ", error);
-    if (error == OTA_AUTH_ERROR) logger.append("Auth Failed");
-    else if (error == OTA_BEGIN_ERROR) logger.append("Begin Failed");
-    else if (error == OTA_CONNECT_ERROR) logger.append("Connect Failed");
-    else if (error == OTA_RECEIVE_ERROR) logger.append("Receive Failed");
-    else if (error == OTA_END_ERROR) logger.append("End Failed");
-    logger.flush(ERROR);
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+    else if (error == OTA_RECEIVE_ERROR)Serial.println("Receive Failed");
+    else if (error == OTA_END_ERROR) Serial.println("End Failed");
     // No matter what happended, simply restart
     ESP.restart();
   });
@@ -947,6 +962,7 @@ void stopSampling() {
   // Stop the timer interrupt
   turnInterrupt(false);
   samplingDuration = millis() - startSamplingMillis;
+  streamConfig.stopTs = myTime.timestamp();
   if (streamClient && streamClient.connected()) streamClient.stop();
   // Reset all variables
   streamConfig.countdown = 0;
@@ -1031,6 +1047,7 @@ void startSampling(bool waitVoltage) {
   freqCalcNow = millis();
   freqCalcStart = millis();
   startSamplingMillis = millis();
+  streamConfig.startTs = myTime.timestamp();
   turnInterrupt(true);
 }
 
@@ -1126,7 +1143,7 @@ void initStreamServer() {
  * and build the publish topics
  ****************************************************/
 void mqttSubscribe() {
-  if (!mqtt.connected) {
+  if (!mqtt.connected()) {
     logger.log(ERROR, "Sth wrong with mqtt Server");
     return;
   }
@@ -1197,8 +1214,9 @@ void relayCB(bool value) {
     // Only if we are not sampling, we can use SPI/EEEPROM
     config.setRelayState(value); 
   }
-  if (mqtt.connected) mqtt.publish(mqttTopicPubSwitch, value ? MQTT_TOPIC_SWITCH_ON : MQTT_TOPIC_SWITCH_OFF);
-  if (mqtt.connected) mqtt.publish(mqttTopicPubSwitch, value ? TRUE_STRING : FALSE_STRING);
+  if (mqtt.connected()) {
+    mqtt.publish(mqttTopicPubSwitch, value ? TRUE_STRING : FALSE_STRING);
+  }
   logger.log("Switched %s", value ? "on" : "off");
 }
 
@@ -1206,7 +1224,9 @@ void relayCB(bool value) {
  * Callback if sampling will be perfomed
  ****************************************************/
 void sampleCB() {
-  if (mqtt.connected) mqtt.publish(mqttTopicPubSample, state==SampleState::SAMPLE ? MQTT_TOPIC_SWITCH_ON : MQTT_TOPIC_SWITCH_OFF);
+  if (mqtt.connected()) {
+    mqtt.publish(mqttTopicPubSample, state==SampleState::SAMPLE ? MQTT_TOPIC_SWITCH_ON : MQTT_TOPIC_SWITCH_OFF);
+  }
   // Do not allow network changes on sampling
-  Network::allowNetworkChange = state==SampleState::SAMPLE ? true : false;
+  Network::allowNetworkChange = state==SampleState::SAMPLE ? false : true;
 }

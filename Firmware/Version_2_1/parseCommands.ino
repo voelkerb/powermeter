@@ -212,10 +212,10 @@ void handleJSON() {
         delay(waitMillis);
         // Update ntp time actively wait for finish
         myTime.updateNTPTime(true);
-        uint32_t delta = ts - myTime.utc_seconds();
+        uint32_t delta = ts - myTime.timestamp().seconds;
         uint32_t nowMs = millis();
         delta *= 1000;
-        delta -= myTime.milliseconds();
+        delta -= myTime.timestamp().milliSeconds;
         if (delta > 20000 or delta < 500) {
           response += F("//nCannot start sampling in: "); response += delta; response += F("ms");
           streamConfig.countdown = 0;
@@ -270,6 +270,8 @@ void handleJSON() {
     docSend["sample_duration"] = samplingDuration;
     docSend["samples"] = totalSamples;
     docSend["sent_samples"] = sentSamples;
+    docSend["start_ts"] = myTime.timestampStr(streamConfig.startTs);
+    docSend["stop_ts"] = myTime.timestampStr(streamConfig.stopTs);
     docSend["ip"] = WiFi.localIP().toString();
     docSend["avg_rate"] = totalSamples/(samplingDuration/1000.0);
     docSend["cmd"] = CMD_STOP;
@@ -379,6 +381,7 @@ void handleJSON() {
       docSend["msg"] = response;
       docSend["mqtt_server"] = address;
       docSend["error"] = false;
+      mqtt.disconnect();
       mqtt.init(config.mqttServer, config.name);
       mqtt.connect();
     } else {
