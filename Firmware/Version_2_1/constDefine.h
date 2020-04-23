@@ -9,6 +9,8 @@
 
 #define VERSION "2.1"
 
+#define SEND_INFO_ON_CLIENT_CONNECT
+
 // Default values
 #define STANDARD_UDP_PORT 54323
 #define STANDARD_TCP_SAMPLE_PORT 54321
@@ -58,11 +60,14 @@ const int RTC_RST = 32;
 
 
 // Buffering stuff
-#define MAX_SEND_SIZE 1024
+#define MAX_SEND_SIZE 2048
 // PSRAM Buffer
 const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define COMMAND_MAX_SIZE 500
 
+
+#define MAX_UNIT_STR_LENGTH 20
+#define MAX_MEASURE_STR_LENGTH 20
 
 #define MEASURE_VI "v,i"
 #define MEASURE_PQ "p,q"
@@ -77,10 +82,13 @@ const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 
 // Communication commands
 #define CMD_SAMPLE "sample"
+#define CMD_REQ_SAMPLES "reqSamples"
+#define CMD_FLOW "cts"
 #define CMD_SWITCH "switch"
 #define CMD_STOP "stop"
 #define CMD_RESTART "restart"
-#define CMD_RESET "factoryReset"
+#define CMD_FACTORY_RESET "factoryReset"
+#define CMD_BASIC_RESET "basicReset"
 #define CMD_INFO "info"
 #define CMD_MDNS "mdns"
 #define CMD_NTP "ntp"
@@ -91,6 +99,14 @@ const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define CMD_MQTT_SERVER "mqttServer"
 #define CMD_STREAM_SERVER "streamServer"
 #define CMD_TIME_SERVER "timeServer"
+#define CMD_LOG_LEVEL "log"
+
+
+#define LOG_LEVEL_ALL "all"
+#define LOG_LEVEL_DEBUG "debug"
+#define LOG_LEVEL_INFO "info"
+#define LOG_LEVEL_WARNING "warning"
+#define LOG_LEVEL_ERROR "error"
 
 
 #define MQTT_TOPIC_BASE "powermeter"
@@ -106,6 +122,8 @@ const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 
 #define TRUE_STRING "true"
 #define FALSE_STRING "false"
+
+#define MAX_MQTT_TOPIC_LEN MAX_MQTT_PUB_TOPIC_SWITCH+MAX_NAME_LEN
 
 const int MAX_MQTT_PUB_TOPIC_SWITCH = sizeof(MQTT_TOPIC_BASE) + sizeof(MQTT_TOPIC_STATE) + sizeof(MQTT_TOPIC_SWITCH) + 4*sizeof(MQTT_TOPIC_SEPARATOR) + 2;
 const int MAX_MQTT_PUB_TOPIC_SAMPLE = sizeof(MQTT_TOPIC_BASE) + sizeof(MQTT_TOPIC_STATE) + sizeof(MQTT_TOPIC_SAMPLE) + 4*sizeof(MQTT_TOPIC_SEPARATOR) + 2;

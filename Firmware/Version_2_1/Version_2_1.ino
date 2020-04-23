@@ -61,7 +61,8 @@ volatile long lastTs = 0;
 
 RingBuffer ringBuffer(PS_BUF_SIZE, true);
 
-static uint8_t sendbuffer[MAX_SEND_SIZE+16] = {0};
+#define SEND_BUF_SIZE MAX_SEND_SIZE+16
+static uint8_t sendbuffer[SEND_BUF_SIZE] = {0};
 // Buffer read/write position
 uint32_t psdReadPtr = 0;
 uint32_t psdWritePtr = 0;
@@ -86,10 +87,11 @@ MQTT mqtt;
 
 struct StreamConfig {
   bool prefix = false;                      // Send data with "data:" prefix
-  Measures measures = Measures::VI;             // The measures to send
+  bool flowControl = false;                 // ifg flow ctr is used
+  Measures measures = Measures::VI;         // The measures to send
   uint8_t measurementBytes = 8;             // Number of bytes for each measurement entry
   unsigned int samplingRate = DEFAULT_SR;   // The samplingrate
-  StreamType stream = StreamType::USB;                  // Channel over which to send
+  StreamType stream = StreamType::USB;      // Channel over which to send
   unsigned int countdown = 0;               // Start at specific time or immidiately
   uint32_t chunkSize = 0;                   // Chunksize of one packet sent
   IPAddress ip;                             // Ip address of data sink
@@ -97,10 +99,13 @@ struct StreamConfig {
   size_t numValues = 24/sizeof(float);      // Number of values
   Timestamp startTs;
   Timestamp stopTs;
+  int slots = 0;
+  int slot = 0;
 };
+bool rts; // ready to send
 
-char measureStr[20] = {'\0'};
-char unitStr[20] = {'\0'};
+char measureStr[MAX_MEASURE_STR_LENGTH] = {'\0'};
+char unitStr[MAX_UNIT_STR_LENGTH] = {'\0'};
 
 StreamConfig streamConfig;
 
@@ -128,6 +133,7 @@ WiFiUDP udpClient;
 
 // Stream client for external stream server
 WiFiClient exStreamServer;
+bool exStreamServerNewConnection = true;
 
 // Information about the current sampling period
 unsigned long samplingCountdown = 0;
@@ -182,22 +188,29 @@ StaticJsonDocument<2*COMMAND_MAX_SIZE> docSend;
 StaticJsonDocument<COMMAND_MAX_SIZE> docSample;
 String response = "";
 
-
-char mqttTopicPubSwitch[MAX_MQTT_PUB_TOPIC_SWITCH+MAX_NAME_LEN] = {'\0'};
-char mqttTopicPubSample[MAX_MQTT_PUB_TOPIC_SAMPLE+MAX_NAME_LEN] = {'\0'};
-char mqttTopicPubInfo[MAX_MQTT_PUB_TOPIC_INFO+MAX_NAME_LEN] = {'\0'};
+char mqttTopicPubSwitch[MAX_MQTT_TOPIC_LEN] = {'\0'};
+char mqttTopicPubSample[MAX_MQTT_TOPIC_LEN] = {'\0'};
+char mqttTopicPubInfo[MAX_MQTT_TOPIC_LEN] = {'\0'};
 
 void (*outputWriter)(bool) = &writeChunks;
 
 /************************ SETUP *************************/
 void setup() {
+  // Set realy to true
+  relay.set(true);
+
+  // Load config, an set relay to wished state
+  config.init();  
+  config.load();
+  relay.set(config.getRelayState());
+
   // Setup serial communication
   Serial.begin(SERIAL_SPEED);
 
-  // At first init the rtc module to get 
+  // At first init the rtc module to get a time behavior
   bool successAll = true;
   bool success = rtc.init();
-  // Init the logging module
+  // Init the logging modules
   logger.setTimeGetter(&timeStr);
   // Add Serial logger
   logger.addLogger(&serialLog);
@@ -213,7 +226,6 @@ void setup() {
 
   if (!success) logger.log(ERROR, "Cannot init RTC");
   successAll &= success;
-  relay.set(true);
   
   relay.setCallback(relayCB);
 
@@ -228,41 +240,37 @@ void setup() {
   delay(200);
   digitalWrite(ERROR_LED, HIGH);
 
-  config.init();  
-  
-  config.load();
-
-  relay.set(config.getRelayState());
-
 
   coreFreq = getCpuFrequencyMhz();
   logger.log(DEBUG, "%s @ firmware %s/%s", config.name, __DATE__, __TIME__);
   logger.log(DEBUG, "Core @ %u MHz", coreFreq);
 
+  // Init the ringbuffer
   success = ringBuffer.init();
   if (!success) logger.log(ERROR, "PSRAM init failed");
   successAll &= success;
 
-  // config.makeDefault();
-  // config.store();
-
+  // Init the timer used for sampling
   timer_init();
 
+  // generate mutex to use the stpm32/34 SPI interface
   stpm_mutex = xSemaphoreCreateMutex();
   // Setup STPM 32
   success = stpm34.init();
   if (!success) logger.log(ERROR, "STPM Init Failed");
   successAll &= success;
-
   
    // Indicate error if there is any
   digitalWrite(ERROR_LED, !successAll);
 
   logger.log(ALL, "Connecting WLAN");
 
+  // Init network connection
   Network::init(&config, onWifiConnect, onWifiDisconnect);
+  // Setup OTA updating
   setupOTA();
 
+  // Resever enough bytes for large string
   response.reserve(2*COMMAND_MAX_SIZE);
 
   // Set mqtt and callbacks
@@ -271,17 +279,20 @@ void setup() {
   mqtt.onDisconnect = &onMQTTDisconnect;
   mqtt.onMessage = &mqttCallback;
 
-  setInfoString(&command[0]);
-  logger.log(&command[0]);
 
   // Init send buffer
-  sprintf((char *)&sendbuffer[0], "%s", DATA_PREFIX);
+  snprintf((char *)&sendbuffer[0], SEND_BUF_SIZE, "%s", DATA_PREFIX);
 
+  // print some info about this powermeter
+  printInfoString();
   logger.log(ALL, "Setup done");
 }
 
 /************************ Loop *************************/
 void loop() {
+  // Arduino OTA
+  ArduinoOTA.handle();
+  // We don't do anything else while updating
   if (updating) return;
 
   // Stuff done on idle
@@ -291,16 +302,16 @@ void loop() {
   } else if (state == SampleState::SAMPLE) {
     onSampling();
   }
-
+  // Stuff on both
   onIdleOrSampling();
 
   // If we only have 200 ms before sampling should start, wait actively
   if (next_state != SampleState::IDLE) {
     if (streamConfig.countdown != 0 and (streamConfig.countdown - millis()) < 200) {
-      // Disable any wifi sleep mode
-      esp_wifi_set_ps(WIFI_PS_NONE);
+      // Disable any wifi sleep mode again
+      if (not Network::ethernet) esp_wifi_set_ps(WIFI_PS_NONE);
       state = next_state;
-      logger.log(DEBUG, "StartSampling @ %s", myTime.timeStr());
+      logger.log(DEBUG, "StartSampling @ around %s", myTime.timeStr());
       // Calculate time to wait
       int32_t mydelta = streamConfig.countdown - millis();
       // Waiting here is not nice, but we wait for zero crossing
@@ -343,7 +354,6 @@ void onIdleOrSampling() {
   }
 
   // Handle tcp clients connections
-
   if ((long)(millis() - tcpUpdate) >= 0) {
     tcpUpdate += TCP_UPDATE_INTERVAL;
     // Handle disconnect
@@ -354,7 +364,7 @@ void onIdleOrSampling() {
       }
     }
 
-    // Handle connect
+    // Handle connects
     WiFiClient newClient = server.available();
     if (newClient) {
       onClientConnect(newClient);
@@ -366,9 +376,8 @@ void onIdleOrSampling() {
  * Things todo regularly if we are not sampling
  ****************************************************/
 void onIdle() {
+  // If we logged during sampling, we flush now
   spiffsLog.flush();
-  // Arduino OTA
-  ArduinoOTA.handle();
 
   // Re-advertise MDNS service service every 30s 
   // TODO: no clue why, but does not work properly for esp32 (maybe it is the mac side)
@@ -377,10 +386,11 @@ void onIdle() {
     // On long time no update, avoid multiupdate
     if ((long)(millis() - mdnsUpdate) >= 0) mdnsUpdate = millis() + MDNS_UPDATE_INTERVAL; 
       // initMDNS();
+      // Not required, only for esp8266
     //MDNS.addService("_elec", "_tcp", STANDARD_TCP_STREAM_PORT);
   }
   
-
+  // update RTC regularly
   if ((long)(millis() - rtcUpdate) >= 0) {
     rtcUpdate += RTC_UPDATE_INTERVAL;
     // On long time no update, avoid multiupdate
@@ -396,21 +406,37 @@ void onIdle() {
     logger.log("");
   }
   
-  if (exStreamServer.connected()) {
-    // Set everything to default settings
-    standardConfig();
-    streamConfig.port = STANDARD_TCP_SAMPLE_PORT;
-    sendClient = (WiFiClient*)&exStreamServer;
-    sendStream = sendClient;
-    sendStreamInfo(sendClient);
-    startSampling();
-  }
-  // Look for people connecting over the stream server
+  /*
+   * NOTE: The streamserver has to send start signal by itself now,
+   * Lets see if this is a better idea
+   * If you want to reenable automatic sending, uncomment it
+   * exStreamServer is now more an external server where we announce that we are now ready
+   * to send data
+   */
+  // Check external stream server connection
+  // if (exStreamServer.connected() and exStreamServerNewConnection) {
+  //   logger.log("Stream Server connected start sampling");
+  //   // If streamserver sends stop, we need a way to prevent a new start of sampling
+  //   // This is how we achieve it.
+  //   exStreamServerNewConnection = false;
+  //   // Set everything to default settings
+  //   standardConfig();
+  //   streamConfig.port = STANDARD_TCP_STREAM_PORT;
+  //   sendClient = (WiFiClient*)&exStreamServer;
+  //   sendStream = sendClient;
+  //   startSampling();
+  //   // Must be done after start st startTS is in data
+  //   sendStreamInfo(sendClient);
+  // }
+
+  // Look for people connecting over the streaxm server
   // If one connected there, immidiately start streaming data
   if (!streamClient.connected()) {
     streamClient = streamServer.available();
     if (streamClient.connected()) {
+      logger.log("Stream Client connected start sampling");
       standardConfig();
+      // No prefix, just raw data
       streamConfig.prefix = false;
       streamConfig.port = STANDARD_TCP_STREAM_PORT;
       sendClient = (WiFiClient*)&streamClient;
@@ -436,6 +462,7 @@ void sendStatusMQTT() {
     docSend["inUse"] =  false;
   } else {
     value = round2<float>(stpm34.readActivePower(1));
+    if (value < 0) value = 0.0;
     docSend["power"] = value;
     docSend["inUse"] = value > 2.0 ? true : false;
     // We want current in A
@@ -445,7 +472,7 @@ void sendStatusMQTT() {
   // unit is watt hours and we want kwh
   value = round2<float>(stpm34.readActiveEnergy(1)/1000.0);
   docSend["energy"] = value;
-  // Something is still wrong with voltage calculation
+  // TODO: Something is still wrong with voltage calculation
   value = round2<float>(stpm34.readRMSVoltage(1)+230.0);
 
   // Unlock stpm 
@@ -480,22 +507,82 @@ void sendStreamInfo(Stream * sender) {
 }
 
 /****************************************************
+ * Send Stream info to 
+ ****************************************************/
+void sendDeviceInfo(Stream * sender) {
+  JsonObject obj = docSend.to<JsonObject>();
+  obj.clear();
+  docSend["cmd"] = "info";
+  docSend["type"] = F("powermeter");
+  docSend["version"] = VERSION;
+  String compiled = __DATE__;
+  compiled += " ";
+  compiled += __TIME__;
+  docSend["compiled"] = compiled;
+  docSend["sys_time"] = myTime.timeStr();
+  docSend["name"] = config.name;
+  docSend["ip"] = Network::localIP().toString();
+  docSend["mqtt_server"] = config.mqttServer;
+  docSend["stream_server"] = config.streamServer;
+  docSend["time_server"] = config.timeServer;
+  docSend["sampling_rate"] = streamConfig.samplingRate;
+  docSend["buffer_size"] = ringBuffer.getSize();
+  docSend["psram"] = ringBuffer.inPSRAM();
+  docSend["rtc"] = rtc.connected;
+  docSend["state"] = state != SampleState::IDLE ? "busy" : "idle";
+  docSend["relay"] = relay.state;
+  String ssids = "[";
+  for (size_t i = 0; i < config.numAPs; i++) {
+    ssids += config.wifiSSIDs[i];
+    if (i < config.numAPs-1) ssids += ", ";
+  }
+  ssids += "]";
+  docSend["ssids"] = ssids;
+  docSend["ssid"] = WiFi.SSID();
+  response = "";
+  serializeJson(docSend, response);
+  response = LOG_PREFIX + response;
+  sender->println(response);
+}
+
+/****************************************************
+ * Send Stream info to 
+ ****************************************************/
+void sendStreamInfo(Stream * sender) {
+  JsonObject obj = docSend.to<JsonObject>();
+  obj.clear();
+  docSend["name"] = config.name;
+  docSend["measures"] = measuresToStr(streamConfig.measures);
+  docSend["chunksize"] = streamConfig.chunkSize;
+  docSend["samplingrate"] = streamConfig.samplingRate;
+  docSend["measurements"] = streamConfig.numValues;
+  docSend["prefix"] = streamConfig.prefix;
+  docSend["cmd"] = CMD_SAMPLE;
+  docSend["unit"] = unitToStr(streamConfig.measures);
+  docSend["startTs"] = myTime.timestampStr(streamConfig.startTs);
+  response = "";
+  serializeJson(docSend, response);
+  response = LOG_PREFIX + response;
+  sender->println(response);
+}
+
+/****************************************************
  * return unit as str
  ****************************************************/
 char * unitToStr(Measures measures) {
   switch (measures) {
     case Measures::VI:
     case Measures::VI_RMS:
-      sprintf(unitStr, UNIT_VI);
+      snprintf(unitStr, MAX_UNIT_STR_LENGTH, UNIT_VI);
       break;
     case Measures::PQ:
-      sprintf(unitStr, UNIT_PQ);
+      snprintf(unitStr, MAX_UNIT_STR_LENGTH, UNIT_PQ);
       break;
     case Measures::VIPQ:
-      sprintf(unitStr, UNIT_VIPQ);
+      snprintf(unitStr, MAX_UNIT_STR_LENGTH, UNIT_VIPQ);
       break;
     default:
-      sprintf(unitStr, "unknown");
+      snprintf(unitStr, MAX_UNIT_STR_LENGTH, "unknown");
       break;
   }
   return &unitStr[0];
@@ -507,19 +594,19 @@ char * unitToStr(Measures measures) {
 char * measuresToStr(Measures measures) {
   switch (measures) {
     case Measures::VI:
-      sprintf(measureStr, MEASURE_VI);
+      snprintf(measureStr, MAX_MEASURE_STR_LENGTH, MEASURE_VI);
       break;
     case Measures::PQ:
-      sprintf(measureStr, MEASURE_PQ);
+      snprintf(measureStr, MAX_MEASURE_STR_LENGTH, MEASURE_PQ);
       break;
     case Measures::VI_RMS:
-      sprintf(measureStr, MEASURE_VI_RMS);
+      snprintf(measureStr, MAX_MEASURE_STR_LENGTH, MEASURE_VI_RMS);
       break;
     case Measures::VIPQ:
-      sprintf(measureStr, MEASURE_VIPQ);
+      snprintf(measureStr, MAX_MEASURE_STR_LENGTH, MEASURE_VIPQ);
       break;
     default:
-      sprintf(measureStr, "unknown");
+      snprintf(measureStr, MAX_MEASURE_STR_LENGTH, "unknown");
       break;
   }
   return &measureStr[0];
@@ -530,8 +617,11 @@ char * measuresToStr(Measures measures) {
  * Set standard configuration
  ****************************************************/
 void standardConfig() {
+  streamConfig.slot = 0;
+  streamConfig.slots = 0;
   streamConfig.stream = StreamType::TCP;
   streamConfig.prefix = true;
+  streamConfig.flowControl = false;
   streamConfig.samplingRate = DEFAULT_SR;
   streamConfig.measures = Measures::VI;
   streamConfig.ip = streamClient.remoteIP();
@@ -540,15 +630,50 @@ void standardConfig() {
   streamConfig.measurementBytes = 8;
   streamConfig.numValues = streamConfig.measurementBytes/sizeof(float);
   calcChunkSize();
+  rts = true;
 }
 
 
+uint32_t sent = 0;
 /****************************************************
  * What todo only on sampling (send data, etc)
  ****************************************************/
 void onSampling() {
-  // ______________ Send data to sink ________________
-  outputWriter(false);
+  // TODO: Chaos aufräumen
+  // Simple seconds send slot calculation
+  if (streamConfig.slots != 0) {
+    Timestamp now = myTime.timestamp();
+    while (now.seconds%streamConfig.slots == streamConfig.slot) {
+      if (ringBuffer.available() > streamConfig.chunkSize) {
+        writeData(*sendStream, streamConfig.chunkSize);
+        sent += streamConfig.chunkSize;
+      } else {
+        break;
+      }
+      now = myTime.timestamp();
+    }
+    if (now.seconds%streamConfig.slots != streamConfig.slot and sent != 0) {
+      if (ringBuffer.available() > streamConfig.chunkSize) {
+        sent = ringBuffer.available()/streamConfig.measurementBytes;
+        logger.log(WARNING, "not finisched %u missing", sent);
+      } else {
+        sent = sent/streamConfig.measurementBytes;
+        logger.log("sent %u samples", sent);
+      }
+      sent = 0;
+    }
+  }
+  //  if (streamConfig.slots != 0) {
+  //   Timestamp now = myTime.timestamp();
+  //   if (now.seconds%streamConfig.slots == streamConfig.slot) {
+  //     rts = true;
+  //   } else {
+  //     rts = false;
+  //   }
+  // }
+
+  // Send data to sink
+  if (outputWriter and rts) outputWriter(false);
 
   // For error check during sampling
   if (sqwCounter) {
@@ -624,6 +749,10 @@ char * timeStr() {
 void onMQTTConnect() {
   logger.log("MQTT connected to %s", mqtt.ip);
   mqttSubscribe();
+  // Should also publish current state
+  if (mqtt.connected()) {
+    mqtt.publish(mqttTopicPubSwitch, (bool)relay.state ? TRUE_STRING : FALSE_STRING);
+  }
 }
 
 /****************************************************
@@ -639,7 +768,7 @@ void onMQTTDisconnect() {
 void onWifiConnect() {
   if (not Network::apMode) {
     logger.log(ALL, "Wifi Connected");
-    logger.log(ALL, "IP: %s", WiFi.localIP().toString().c_str());
+    logger.log(ALL, "IP: %s", Network::localIP().toString().c_str());
     // Reinit mdns
     initMDNS();
     // The stuff todo if we have a network connection (and hopefully internet as well)
@@ -649,7 +778,6 @@ void onWifiConnect() {
   } else {
     logger.log(ALL, "Network AP Opened");
   }
-
 
   // Start the TCP server
   server.begin();
@@ -682,11 +810,15 @@ void onClientConnect(WiFiClient &newClient) {
   for (size_t i = 0; i < MAX_CLIENTS; i++) {
     if (!clientConnected[i]) {
       client[i] = newClient;
+      client[i].setNoDelay(true);
       // Set connected flag
       clientConnected[i] = true;
       streamLog[i]->_type = INFO; // This might be later reset
       streamLog[i]->_stream = (Stream*)&client[i];
       logger.addLogger(streamLog[i]);
+      #ifdef SEND_INFO_ON_CLIENT_CONNECT
+      sendDeviceInfo((Stream*)&client[i]);
+      #endif
       return;
     }
   }
@@ -702,6 +834,10 @@ void onClientDisconnect(WiFiClient &oldClient, size_t i) {
   logger.log("Client disconnected %s port %u", oldClient.remoteIP().toString().c_str(), oldClient.remotePort());
   logger.removeLogger(streamLog[i]);
   streamLog[i]->_stream = NULL;
+  //  Reset new connection for streamserver
+  // if ((WiFiClient*)&oldClient == (WiFiClient*)&exStreamServer) {
+  //   exStreamServerNewConnection = true;
+  // }
 }
 
 
@@ -710,10 +846,14 @@ void onClientDisconnect(WiFiClient &oldClient, size_t i) {
  * depending on data sink
  ****************************************************/
 void writeChunks(bool tail) {
-  while(ringBuffer.available() > streamConfig.chunkSize) {
+  // uint32_t start = millis();
+  while(ringBuffer.available() > streamConfig.chunkSize and millis()-start < 15) {
+    // start = millis();
     writeData(*sendStream, streamConfig.chunkSize);
+    // Serial.printf("%ums\n", millis()-start);
   }
   if (tail) {
+    while(ringBuffer.available() > streamConfig.chunkSize) writeData(*sendStream, streamConfig.chunkSize);
     writeData(*sendStream, ringBuffer.available());
   }
 }
@@ -723,12 +863,20 @@ void writeChunks(bool tail) {
  * handling
  ****************************************************/
 void writeChunksUDP(bool tail) {
-  while(ringBuffer.available() > streamConfig.chunkSize) {
+  uint32_t start = millis();
+  while(ringBuffer.available() > streamConfig.chunkSize and millis()-start < 15) {
+    start = millis();
     udpClient.beginPacket(streamConfig.ip, streamConfig.port);
     writeData(udpClient, streamConfig.chunkSize);
     udpClient.endPacket();
+    Serial.printf("%ums\n", millis()-start);
   }
   if (tail) {
+    while(ringBuffer.available() > streamConfig.chunkSize) {
+      udpClient.beginPacket(streamConfig.ip, streamConfig.port);
+      writeData(udpClient, streamConfig.chunkSize);
+      udpClient.endPacket();
+    }
     udpClient.beginPacket(streamConfig.ip, streamConfig.port);
     writeData(udpClient, ringBuffer.available());
     udpClient.endPacket();
@@ -769,6 +917,7 @@ void writeDataMQTT(bool tail) {
  * Write one chunk of data to sink.
  ****************************************************/
 void writeData(Stream &getter, uint16_t size) {
+  // long startDone = micros();
   if (size <= 0) return;
   uint32_t start = 0;
   if (streamConfig.prefix) {
@@ -780,18 +929,26 @@ void writeData(Stream &getter, uint16_t size) {
     start += sizeof(uint32_t);
     packetNumber += 1;
   }
+  // long prefixDone = micros();
 
   ringBuffer.read(&sendbuffer[start], size);
+  // long readDone = micros();
   // Everything is sent at once (hopefully)
   uint32_t sent = getter.write((uint8_t*)&sendbuffer[0], size+start);
+  // long sendDone = micros();
   if (sent > start) sentSamples += (sent-start)/streamConfig.measurementBytes;
+  // long allDone = micros();
+  // serialLog.log("prefix: %uus", prefixDone-startDone);
+  // serialLog.log("read: %uus", readDone-prefixDone);
+  // serialLog.log("send: %uus", sendDone-readDone);
+  // serialLog.log("Total: %uus", allDone-startDone);
 }
 
 void test(bool tail) {
   if (ringBuffer.available() > streamConfig.samplingRate*streamConfig.measurementBytes) {
     ringBuffer.reset();
     packetNumber++;
-    size_t test = sprintf((char*)&sendbuffer[0], "Test: %s - %u\r\n", timeStr(), packetNumber);
+    size_t test = snprintf((char*)&sendbuffer[0], SEND_BUF_SIZE, "Test: %s - %u\r\n", timeStr(), packetNumber);
     sendStream->write((uint8_t*)&sendbuffer[0], test);
   }
 }
@@ -804,7 +961,7 @@ volatile uint32_t mytime = micros();
 void IRAM_ATTR sample_ISR() {
   static BaseType_t xHigherPriorityTaskWoken = pdFALSE;
   //Serial.println("TIMERISR");
-  mytime = micros();
+  // mytime = micros();
   xSemaphoreGiveFromISR(timer_sem, &xHigherPriorityTaskWoken);
   if ( xHigherPriorityTaskWoken) {
     portYIELD_FROM_ISR(); // this wakes up sample_timer_task immediately
@@ -914,6 +1071,7 @@ void setupOTA() {
         clientConnected[i] = false;
       }
     }
+    if (exStreamServer.connected()) exStreamServer.stop();
     if (streamClient.connected()) streamClient.stop();
     
     // Stopping all other tcp stuff
@@ -1044,8 +1202,8 @@ void startSampling(bool waitVoltage) {
     while(stpm34.readVoltage(1) > 0) {yield();}
     while(stpm34.readVoltage(1) < 0) {yield();}
   }
-  freqCalcNow = millis();
-  freqCalcStart = millis();
+  freqCalcNow = micros();
+  freqCalcStart = micros();
   startSamplingMillis = millis();
   streamConfig.startTs = myTime.timestamp();
   turnInterrupt(true);
@@ -1088,7 +1246,7 @@ void initMDNS() {
   char * name = config.name;
   if (strlen(name) == 0) {
     logger.log(ERROR, "Sth wrong with mdns");
-    strcpy(name,"powerMeterX");
+    strcpy(name,"powermeterX");
   }
   // Setting up MDNs with the given Name
   logger.log("MDNS Name: %s", name);
@@ -1110,8 +1268,13 @@ void checkStreamServer(void * pvParameters) {
         and state == SampleState::IDLE                      // and in idle mode
         and Network::connected and not Network::apMode      // Network is STA mode
         and strcmp(config.streamServer, NO_SERVER) != 0) {  // and server is set
-      exStreamServer.connect(config.streamServer, STANDARD_TCP_SAMPLE_PORT);
-    }
+      if (exStreamServer.connect(config.streamServer, STANDARD_TCP_STREAM_PORT)) {
+        logger.log("Connected to StreamServer: %s", config.streamServer);
+        onClientConnect(exStreamServer);
+      } else {
+        logger.log(WARNING, "Cannot connect to StreamServer: %s", config.streamServer);
+      }
+    } 
     vTaskDelay(STREAM_SERVER_UPDATE_INTERVAL);
   }
   vTaskDelete(streamServerTaskHandle); // destroy this task 
@@ -1124,7 +1287,7 @@ void checkStreamServer(void * pvParameters) {
 void initStreamServer() {
   if (strcmp(config.streamServer, NO_SERVER) != 0 and !exStreamServer.connected()) {
     logger.log("Try to connect Stream Server: %s", config.streamServer);
-    exStreamServer.connect(config.streamServer, STANDARD_TCP_SAMPLE_PORT);
+    // exStreamServer.connect(config.streamServer, STANDARD_TCP_STREAM_PORT);
     // Handle reconnects
     if (streamServerTaskHandle == NULL) {
       xTaskCreate(
@@ -1144,28 +1307,28 @@ void initStreamServer() {
  ****************************************************/
 void mqttSubscribe() {
   if (!mqtt.connected()) {
-    logger.log(ERROR, "Sth wrong with mqtt Server");
+    logger.log(ERROR, "Should subscribe but is not connected to mqtt Server");
     return;
   }
 
   // Build publish topics
-  sprintf(&mqttTopicPubSwitch[0], "%s%c", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR);
+  snprintf(&mqttTopicPubSwitch[0], MAX_MQTT_TOPIC_LEN, "%s%c", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR);
 
   response = mqttTopicPubSwitch;
   response += "+";
   logger.log("Subscribing to: %s", response.c_str());
   mqtt.subscribe(response.c_str());
   
-  sprintf(&mqttTopicPubSwitch[0], "%s%c%s%c", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR, config.name, MQTT_TOPIC_SEPARATOR);
+  snprintf(&mqttTopicPubSwitch[0], MAX_MQTT_TOPIC_LEN, "%s%c%s%c", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR, config.name, MQTT_TOPIC_SEPARATOR);
 
   response = mqttTopicPubSwitch;
   response += "+";
   logger.log("Subscribing to: %s", response.c_str());
   mqtt.subscribe(response.c_str());
   
-  sprintf(&mqttTopicPubSwitch[0], "%s%c%s%c%s%c%s", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR, config.name, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_STATE, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_SWITCH);
-  sprintf(&mqttTopicPubSample[0], "%s%c%s%c%s%c%s", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR, config.name, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_STATE, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_SAMPLE);
-  sprintf(&mqttTopicPubInfo[0], "%s%c%s%c%s%c%s", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR, config.name, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_STATE, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_INFO);
+  snprintf(&mqttTopicPubSwitch[0], MAX_MQTT_TOPIC_LEN, "%s%c%s%c%s%c%s", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR, config.name, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_STATE, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_SWITCH);
+  snprintf(&mqttTopicPubSample[0], MAX_MQTT_TOPIC_LEN, "%s%c%s%c%s%c%s", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR, config.name, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_STATE, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_SAMPLE);
+  snprintf(&mqttTopicPubInfo[0],   MAX_MQTT_TOPIC_LEN, "%s%c%s%c%s%c%s", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR, config.name, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_STATE, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_INFO);
 }
 
 /****************************************************
@@ -1173,37 +1336,22 @@ void mqttSubscribe() {
  * of this device
  * NOTE: Make sure enough memory is allocated for str
  ****************************************************/
-void setInfoString(char * str) {
-  size_t idx = 0;
-  idx += sprintf(&str[idx], "\n");
+void printInfoString() {
   // Name and firmware
-  idx += sprintf(&str[idx], "%s @ firmware: %s/%s", config.name, __DATE__, __TIME__);
-  idx += sprintf(&str[idx], "\nUsing %d bytes ", ringBuffer.getSize());
-  // PSRAM or not
-  if (ringBuffer.inPSRAM()) {
-    idx += sprintf(&str[idx], "PSRAM");
-  } else {
-    idx += sprintf(&str[idx], "RAM");
-  }
+  logger.log("%s @ firmware: %s/%s", config.name, __DATE__, __TIME__);
+
+  logger.log("Using %d bytes %s", ringBuffer.getSize(), ringBuffer.inPSRAM()?"PSRAM":"RAM");
+ 
   if (rtc.connected) {
-    idx += sprintf(&str[idx], "\nRTC is connected ");
-    if (rtc.lost) {
-      idx += sprintf(&str[idx], "but has lost time");
-    } else {
-      idx += sprintf(&str[idx], "and has valid time");
-    }
+    logger.log("RTC is connected %s", rtc.lost?"but has lost time":"and has valid time");
   } else {
-    idx += sprintf(&str[idx], "\nNo RTC");
+    logger.log("No RTC");
   }
-  idx += sprintf(&str[idx], "\nCurrent system time: ToImplement");
-  // All SSIDs
-  String ssids = "";
+  logger.append("Known Networks: [");
   for (size_t i = 0; i < config.numAPs; i++) {
-    ssids += config.wifiSSIDs[i];
-    if (i < config.numAPs-1) ssids += ", ";
+    logger.append("%s%s", config.wifiSSIDs[i], i < config.numAPs-1?", ":"");
   }
-  idx += sprintf(&str[idx], "\nKnown Networks: [%s]", ssids.c_str());
-  idx += sprintf(&str[idx], "\n");
+  logger.flushAppended();
 }
 
 /****************************************************
