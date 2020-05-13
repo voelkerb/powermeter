@@ -10,6 +10,7 @@
 #define VERSION "2.1"
 
 #define SEND_INFO_ON_CLIENT_CONNECT
+// #define CMD_OVER_SERIAL
 
 // Default values
 #define STANDARD_UDP_PORT 54323
@@ -22,12 +23,13 @@
 #define LOCATION_TIME_OFFSET 3600//7200 // 2 hours or (2*60*60)
 
 #define MDNS_UPDATE_INTERVAL 30000
-#define TCP_UPDATE_INTERVAL 100
+#define TCP_UPDATE_INTERVAL 1000
 #define LIFENESS_UPDATE_INTERVAL 1000
 #define RTC_UPDATE_INTERVAL 30000
 #define STREAM_SERVER_UPDATE_INTERVAL 30000
 #define MQTT_UPDATE_INTERVAL 5000
 
+#define MAX_CNT_BEFORE_DISCONNECT 3
 // We allow a max of 3 tcp clients for performance reasons
 #define MAX_CLIENTS 3
 

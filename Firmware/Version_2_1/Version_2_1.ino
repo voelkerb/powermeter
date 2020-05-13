@@ -118,6 +118,7 @@ volatile long freq = 0;
 // TCP clients and current connected state, each client is assigned a logger
 WiFiClient client[MAX_CLIENTS];
 bool clientConnected[MAX_CLIENTS] = {false};
+int clientConnectionLossCnt[MAX_CLIENTS] = {0};
 StreamLogger * streamLog[MAX_CLIENTS];
 
 // Strean client is for ffmpeg direct streaming
@@ -152,7 +153,7 @@ long mqttUpdate = millis();
 
 // HW Timer and mutex for sapmpling ISR
 hw_timer_t * timer = NULL;
-portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
+portMUX_TYPE counterMux = portMUX_INITIALIZER_UNLOCKED;
 SemaphoreHandle_t stpm_mutex;
 // Current CPU speed
 unsigned int coreFreq = 0;
@@ -331,20 +332,12 @@ void onIdleOrSampling() {
   // MQTT loop
   mqtt.update();
 
-  // Update stuff over mqtt
-  if (mqtt.connected()) {
-    if ((long)(millis() - mqttUpdate) >= 0) {
-      mqttUpdate += MQTT_UPDATE_INTERVAL;
-      // On long time no update, avoid multiupdate
-      if ((long)(millis() - mqttUpdate) >= 0) mqttUpdate = millis() + MQTT_UPDATE_INTERVAL; 
-      sendStatusMQTT();
-    }
-  }
-
   // Handle serial requests
+  #ifdef CMD_OVER_SERIAL
   if (Serial.available()) {
     handleEvent(&Serial);
   }
+  #endif
 
   // Handle tcp requests
   for (size_t i = 0; i < MAX_CLIENTS; i++) {
@@ -358,9 +351,20 @@ void onIdleOrSampling() {
     tcpUpdate += TCP_UPDATE_INTERVAL;
     // Handle disconnect
     for (size_t i = 0; i < MAX_CLIENTS; i++) {
-      if (clientConnected[i] and !client[i].connected()) {
-        onClientDisconnect(client[i], i);
-        clientConnected[i] = false;
+      if (clientConnected[i]) {
+        if (!client[i].connected()) {
+          logger.log(WARNING, "client %s not connected for %is", client[i].remoteIP().toString().c_str(), clientConnectionLossCnt[i]);
+          // client[i].connected() may fire even if connected, therefore we use this dirty hack
+          // Only if multiple times disconnect seen, actually disconnect it.
+          // NOTE: What happens on client write in this case?
+          if (clientConnectionLossCnt[i] >= MAX_CNT_BEFORE_DISCONNECT) {
+            onClientDisconnect(client[i], i);
+            clientConnected[i] = false;
+          }
+          clientConnectionLossCnt[i]++;
+        } else {
+          clientConnectionLossCnt[i] = 0;
+        }
       }
     }
 
@@ -378,6 +382,16 @@ void onIdleOrSampling() {
 void onIdle() {
   // If we logged during sampling, we flush now
   spiffsLog.flush();
+
+  // Update stuff over mqtt
+  if (mqtt.connected()) {
+    if ((long)(millis() - mqttUpdate) >= 0) {
+      mqttUpdate += MQTT_UPDATE_INTERVAL;
+      // On long time no update, avoid multiupdate
+      if ((long)(millis() - mqttUpdate) >= 0) mqttUpdate = millis() + MQTT_UPDATE_INTERVAL; 
+      sendStatusMQTT();
+    }
+  }
 
   // Re-advertise MDNS service service every 30s 
   // TODO: no clue why, but does not work properly for esp32 (maybe it is the mac side)
@@ -486,25 +500,6 @@ void sendStatusMQTT() {
   mqtt.publish(mqttTopicPubSample, response.c_str());
 }
 
-/****************************************************
- * Send Stream info to 
- ****************************************************/
-void sendStreamInfo(Stream * sender) {
-  JsonObject obj = docSend.to<JsonObject>();
-  obj.clear();
-  docSend["name"] = config.name;
-  docSend["measures"] = measuresToStr(streamConfig.measures);
-  docSend["chunksize"] = streamConfig.chunkSize;
-  docSend["samplingrate"] = streamConfig.samplingRate;
-  docSend["measurements"] = streamConfig.numValues;
-  docSend["prefix"] = streamConfig.prefix;
-  docSend["cmd"] = CMD_SAMPLE;
-  docSend["unit"] = unitToStr(streamConfig.measures);
-  response = "";
-  serializeJson(docSend, response);
-  response = LOG_PREFIX + response;
-  sender->println(response);
-}
 
 /****************************************************
  * Send Stream info to 
@@ -680,10 +675,10 @@ void onSampling() {
     portENTER_CRITICAL(&sqwMux);
     sqwCounter--;
     portEXIT_CRITICAL(&sqwMux);
-    if (!firstSqwv and testSamples != 0) {
-      response = "******** MISSED ";
+    if (!firstSqwv and testSamples != streamConfig.samplingRate) {
+      response = "MISSED ";
       response += streamConfig.samplingRate - testSamples;
-      response += " SAMPLES ********";
+      response += " SAMPLES";
       logger.log(ERROR, response.c_str());
     }
     // If it is still > 0, our loop is too slow, 
@@ -811,6 +806,8 @@ void onClientConnect(WiFiClient &newClient) {
     if (!clientConnected[i]) {
       client[i] = newClient;
       client[i].setNoDelay(true);
+      client[i].setTimeout(10);
+      clientConnectionLossCnt[i] = 0;
       // Set connected flag
       clientConnected[i] = true;
       streamLog[i]->_type = INFO; // This might be later reset
@@ -847,7 +844,7 @@ void onClientDisconnect(WiFiClient &oldClient, size_t i) {
  ****************************************************/
 void writeChunks(bool tail) {
   // uint32_t start = millis();
-  while(ringBuffer.available() > streamConfig.chunkSize and millis()-start < 15) {
+  while(ringBuffer.available() > streamConfig.chunkSize) {
     // start = millis();
     writeData(*sendStream, streamConfig.chunkSize);
     // Serial.printf("%ums\n", millis()-start);
@@ -958,8 +955,15 @@ void test(bool tail) {
  ****************************************************/
 static SemaphoreHandle_t timer_sem;
 volatile uint32_t mytime = micros();
+
 void IRAM_ATTR sample_ISR() {
   static BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+  // Vaiables for frequency count
+  portENTER_CRITICAL_ISR(&counterMux);
+  counter++;
+  portEXIT_CRITICAL(&counterMux);
+
   //Serial.println("TIMERISR");
   // mytime = micros();
   xSemaphoreGiveFromISR(timer_sem, &xHigherPriorityTaskWoken);
@@ -982,22 +986,20 @@ void IRAM_ATTR sample_timer_task(void *param) {
     xSemaphoreTake(timer_sem, portMAX_DELAY);
     // test++;
     // if (test%100 == 0) {
-    //   Serial.println(micros()-mytime);
+    //   Serial.printf("%lu\n", dur);
     // }
     // Lock stpm before using it
     xSemaphoreTake(stpm_mutex, portMAX_DELAY);
     
-    // Vaiables for frequency count
-    counter++;
-    totalSamples++;
+
     if (counter >= streamConfig.samplingRate) {
       freqCalcNow = micros();
       freq = freqCalcNow-freqCalcStart;
       freqCalcStart = freqCalcNow;
-      counter = 0;
       if (rtc.connected) timerAlarmDisable(timer);
     }
 
+    totalSamples++;
     if (streamConfig.measures == Measures::VI) {
       stpm34.readVoltAndCurr((float*) &data[0]);
       // stpm34.readVoltageAndCurrent(1, (float*) &values[0], (float*) &values[1]);
@@ -1009,13 +1011,21 @@ void IRAM_ATTR sample_timer_task(void *param) {
       stpm34.readRMSVoltageAndCurrent(1, (float*) &data[0], (float*) &data[1]);
     }
 
-    ringBuffer.write((uint8_t*)&data[0], streamConfig.measurementBytes);
+    bool success = ringBuffer.write((uint8_t*)&data[0], streamConfig.measurementBytes);
+    if (!success) {
+      ringBuffer.reset();
+      uint32_t lostSamples = ringBuffer.getSize()/streamConfig.measurementBytes;
+      logger.log(ERROR, "Overflow during ringBuffer write, lost %lu samples", lostSamples);
+    }
     // Unlock stpm 
     xSemaphoreGive(stpm_mutex);
 
   }
   vTaskDelete( NULL );
 }
+
+uint64_t oc = ESP.getCycleCount();
+uint32_t dur = 0;
 
 /****************************************************
  * A SQWV signal from the RTC is generated, we
@@ -1024,18 +1034,23 @@ void IRAM_ATTR sample_timer_task(void *param) {
  * the appropriate <samplingrate> samples each second
  ****************************************************/
 void IRAM_ATTR sqwvTriggered() {
+  // uint64_t cc = ESP.getCycleCount();
+  // dur = cc-oc;
+  // oc = cc;
+  // Serial.printf("%lu\n", dur);
   // Disable timer if not already done in ISR
   timerAlarmDisable(timer);
+  timerWrite(timer, 0);
   // Reset counter if not already done in ISR
+  portENTER_CRITICAL_ISR(&counterMux);
   testSamples = counter;
-  portENTER_CRITICAL_ISR(&timerMux);
   counter = 0;
-  portEXIT_CRITICAL_ISR(&timerMux);
+  portEXIT_CRITICAL(&counterMux);
   
   // timerAlarmWrite(timer, TIMER_CYCLES_FAST, true);
   // We take one sample and enable the timing interrupt afterwards
   // this should allow the ISR e.g. at 4kHz to take 3999 samples during the next second
-  timerWrite(timer, 0);
+  // timerWrite(timer, 0);
   sample_ISR();
   // Enable timer
   timerAlarmEnable(timer);
@@ -1060,9 +1075,25 @@ void setupOTA() {
   // ArduinoOTA.setPasswordHash(2"21232f297a57a5a743894a0e4a801fc3");
 
   ArduinoOTA.onStart([]() {
-    Network::allowNetworkChange = false;
     updating = true;
+    Network::allowNetworkChange = false;
     logger.log("Start updating");
+
+    if (state != SampleState::IDLE) {
+      logger.log(WARNING, "Stop Sampling, Update Requested");
+      stopSampling();
+      // Write remaining chunks with tailr
+      if (outputWriter != NULL) outputWriter(true);
+      docSend["msg"] = F("Received stop command");
+      docSend["sample_duration"] = samplingDuration;
+      docSend["samples"] = totalSamples;
+      docSend["sent_samples"] = sentSamples;
+      docSend["start_ts"] = myTime.timestampStr(streamConfig.startTs);
+      docSend["stop_ts"] = myTime.timestampStr(streamConfig.stopTs);
+      docSend["ip"] = WiFi.localIP().toString();
+      docSend["avg_rate"] = totalSamples/(samplingDuration/1000.0);
+      docSend["cmd"] = CMD_STOP;
+    }
 
     // Disconnecting all connected clients
     for (size_t i = 0; i < MAX_CLIENTS; i++) {
@@ -1188,6 +1219,9 @@ void startSampling(bool waitVoltage) {
   counter = 0;
   sentSamples = 0;
   totalSamples = 0;
+  // TIMER_CYCLES_FAST = (1000000) / streamConfig.samplingRate; // Cycles between HW timer inerrupts
+  //             240Mhz      240       e.g. 4000Hz     
+      
   TIMER_CYCLES_FAST = (1000000) / streamConfig.samplingRate; // Cycles between HW timer inerrupts
   calcChunkSize();
   ringBuffer.reset();
@@ -1215,14 +1249,17 @@ void startSampling(bool waitVoltage) {
 void turnInterrupt(bool on) {
   cli();//stop interrupts
   if (on) {
-    // timer_init();
+    timer_init();
     // The timer runs at 80 MHZ, independent of cpu clk
     timerAlarmWrite(timer, TIMER_CYCLES_FAST, true);
     timerWrite(timer, 0);
     timerAlarmEnable(timer);
+    uint64_t microsTimer = timerAlarmReadMicros(timer);
+    logger.log("microsTimer: %uus", microsTimer);
   } else {
     if (timer != NULL) timerAlarmDisable(timer);
-    // timer = NULL;
+    timerEnd(timer);
+    timer = NULL;
   }
   sei();
 }
@@ -1235,6 +1272,8 @@ void timer_init() {
   timer = NULL;
   // Make a 1 Mhz clk here
   timer = timerBegin(0, 80, true);
+  // timer = timerBegin(1, 80, true);
+  // timer = timerBegin(1, 8, true);
   timerAttachInterrupt(timer, &sample_ISR, true);
 }
 
@@ -1263,6 +1302,7 @@ void initMDNS() {
  ****************************************************/
 TaskHandle_t streamServerTaskHandle = NULL;
 void checkStreamServer(void * pvParameters) {
+  bool first = true;
   while (not updating) {
     if (!exStreamServer.connected()                         // If not already connected
         and state == SampleState::IDLE                      // and in idle mode
@@ -1272,9 +1312,17 @@ void checkStreamServer(void * pvParameters) {
         logger.log("Connected to StreamServer: %s", config.streamServer);
         onClientConnect(exStreamServer);
       } else {
-        logger.log(WARNING, "Cannot connect to StreamServer: %s", config.streamServer);
+        // Serial.printf("Ss server connection failed\n");
+        if (first) {
+          logger.log(WARNING, "Cannot connect to StreamServer: %s", config.streamServer);
+          first = false;
+        }
       }
-    } 
+    } else {
+      // Serial.printf("prequisitfailed: %i, %i\n", exStreamServer.connected(), state == SampleState::IDLE); 
+
+    }
+    
     vTaskDelay(STREAM_SERVER_UPDATE_INTERVAL);
   }
   vTaskDelete(streamServerTaskHandle); // destroy this task 
@@ -1286,7 +1334,7 @@ void checkStreamServer(void * pvParameters) {
  ****************************************************/
 void initStreamServer() {
   if (strcmp(config.streamServer, NO_SERVER) != 0 and !exStreamServer.connected()) {
-    logger.log("Try to connect Stream Server: %s", config.streamServer);
+    // logger.log("Try to connect Stream Server: %s", config.streamServer);
     // exStreamServer.connect(config.streamServer, STANDARD_TCP_STREAM_PORT);
     // Handle reconnects
     if (streamServerTaskHandle == NULL) {

@@ -9,6 +9,10 @@ void handleEvent(Stream * getter) {
     getter->println(F("Info:Setup done"));
     return;
   }
+  // This is just a keepalive msg
+  if (command[0] == '!') {
+    return;
+  }
   #ifdef DEBUG_DEEP
   logger.log(INFO, command);
   #endif
@@ -211,7 +215,9 @@ void handleJSON() {
       }
       // Set global sampling variable
       streamConfig.samplingRate = rate;
-      TIMER_CYCLES_FAST = (1000000) / streamConfig.samplingRate; // Cycles between HW timer inerrupts
+
+      // TIMER_MAX = CLOCK_SPEED/PRESCALER/samplingRate;
+
       calcChunkSize();      
       docSend["measures"] = measuresToStr(streamConfig.measures);
       docSend["chunksize"] = streamConfig.chunkSize;
@@ -301,7 +307,7 @@ void handleJSON() {
     if (state == SampleState::SAMPLE) {
       rts = true;
       long samples = docRcv["samples"].as<long>();
-      if (samples <= 10 ||samples > 2000) {
+      if (samples <= 10 || samples > 2000) {
         response += F("stay between 10 and 100000 samples, not "); response += samples;
         docSend["msg"] = response;
         return;
@@ -310,7 +316,7 @@ void handleJSON() {
       // We don't want to send anything
       JsonObject obj = docSend.to<JsonObject>();
       obj.clear();
-      if (ringBuffer.available() < samples) {
+      if (ringBuffer.available() < chunk) {
         return;
       }
       Serial.println("Sending... ");
