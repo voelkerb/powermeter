@@ -46,3 +46,6 @@
 [submodule "Firmware/Version_2_1/src/mqtt"]
 	path = Firmware/Version_2_1/src/mqtt
 	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.mqtt
+[submodule "Firmware/allDevicesSettingsSetter/src/logger"]
+	path = Firmware/allDevicesSettingsSetter/src/logger
+	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.logger

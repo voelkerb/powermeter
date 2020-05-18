@@ -9,31 +9,42 @@
 
 #define VERSION "2.1"
 
+#define SEND_INFO_ON_CLIENT_CONNECT
+// #define USE_SERIAL
+// #define CMD_OVER_SERIAL
+
 // Default values
 #define STANDARD_UDP_PORT 54323
 #define STANDARD_TCP_SAMPLE_PORT 54321
 #define STANDARD_TCP_STREAM_PORT 54322
 #define DEFAULT_SR 4000
 
+// Correction threshold in s
+#define NTP_CORRECT_SAMPLINGRATE
+#define CORRECT_SAMPLING_THRESHOLD 0.005
+#define MAX_CORRECT_SAMPLES 5
 
 // Location time difference between us (Freiburg, Germany) and NTP time 
 #define LOCATION_TIME_OFFSET 3600//7200 // 2 hours or (2*60*60)
 
-#define MQTT_UPDATE_INTERVAL 10000
 #define MDNS_UPDATE_INTERVAL 30000
-#define TCP_UPDATE_INTERVAL 100
+#define TCP_UPDATE_INTERVAL 1000
 #define LIFENESS_UPDATE_INTERVAL 1000
 #define RTC_UPDATE_INTERVAL 30000
+#define STREAM_SERVER_UPDATE_INTERVAL 30000
+#define MQTT_UPDATE_INTERVAL 5000
 
+#define MAX_CNT_BEFORE_DISCONNECT 3
 // We allow a max of 3 tcp clients for performance reasons
 #define MAX_CLIENTS 3
 
 const char * LOG_FILE = "/log.txt";
 
-const char* ntpServerName = "time.uni-freiburg.de";//"0.de.pool.ntp.org";
-
 const char LOG_PREFIX_SERIAL[] = "";
 const char LOG_PREFIX[] = "Info:";
+
+const char DATA_PREFIX[] = "Data:";
+const size_t PREFIX_SIZE = strlen(DATA_PREFIX); 
 
 // Pin definitions
 // Red error led for first flash
@@ -56,17 +67,37 @@ const int RTC_RST = 32;
 
 
 // Buffering stuff
-#define MAX_SEND_SIZE 512 // 1024
+// Should be power of 2
+// #define MAX_SEND_SIZE 2048
+#define MAX_SEND_SIZE 1024
 // PSRAM Buffer
 const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define COMMAND_MAX_SIZE 500
 
+
+#define MAX_UNIT_STR_LENGTH 20
+#define MAX_MEASURE_STR_LENGTH 20
+
+#define MEASURE_VI "v,i"
+#define MEASURE_PQ "p,q"
+#define MEASURE_VI_RMS "v,i_RMS"
+#define MEASURE_VIPQ "v,i,p,q"
+
+
+#define UNIT_VI "V,mA"
+#define UNIT_PQ "W,VAR"
+#define UNIT_VIPQ "V,mA,W,VAR"
+
+
 // Communication commands
 #define CMD_SAMPLE "sample"
+#define CMD_REQ_SAMPLES "reqSamples"
+#define CMD_FLOW "cts"
 #define CMD_SWITCH "switch"
 #define CMD_STOP "stop"
 #define CMD_RESTART "restart"
-#define CMD_RESET "factoryReset"
+#define CMD_FACTORY_RESET "factoryReset"
+#define CMD_BASIC_RESET "basicReset"
 #define CMD_INFO "info"
 #define CMD_MDNS "mdns"
 #define CMD_NTP "ntp"
@@ -75,6 +106,17 @@ const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define CMD_CLEAR_LOG "clearLog"
 #define CMD_GET_LOG "getLog"
 #define CMD_MQTT_SERVER "mqttServer"
+#define CMD_STREAM_SERVER "streamServer"
+#define CMD_TIME_SERVER "timeServer"
+#define CMD_LOG_LEVEL "log"
+
+
+#define LOG_LEVEL_ALL "all"
+#define LOG_LEVEL_DEBUG "debug"
+#define LOG_LEVEL_INFO "info"
+#define LOG_LEVEL_WARNING "warning"
+#define LOG_LEVEL_ERROR "error"
+
 
 #define MQTT_TOPIC_BASE "powermeter"
 #define MQTT_TOPIC_SEPARATOR '/'
@@ -87,6 +129,17 @@ const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define MQTT_TOPIC_CMD "cmd"
 #define MQTT_TOPIC_INFO "info"
 
+#define TRUE_STRING "true"
+#define FALSE_STRING "false"
+
+#define MAX_MQTT_TOPIC_LEN MAX_MQTT_PUB_TOPIC_SWITCH+MAX_NAME_LEN
+
 const int MAX_MQTT_PUB_TOPIC_SWITCH = sizeof(MQTT_TOPIC_BASE) + sizeof(MQTT_TOPIC_STATE) + sizeof(MQTT_TOPIC_SWITCH) + 4*sizeof(MQTT_TOPIC_SEPARATOR) + 2;
 const int MAX_MQTT_PUB_TOPIC_SAMPLE = sizeof(MQTT_TOPIC_BASE) + sizeof(MQTT_TOPIC_STATE) + sizeof(MQTT_TOPIC_SAMPLE) + 4*sizeof(MQTT_TOPIC_SEPARATOR) + 2;
 const int MAX_MQTT_PUB_TOPIC_INFO = sizeof(MQTT_TOPIC_BASE) + sizeof(MQTT_TOPIC_STATE) + sizeof(MQTT_TOPIC_INFO) + 4*sizeof(MQTT_TOPIC_SEPARATOR) + 2;
+
+
+template < typename TOut, typename TIn >
+TOut round2( TIn value ) {
+   return static_cast<TOut>((int)(value * 100 + 0.5) / 100.0);
+}

@@ -190,6 +190,7 @@ void setup() {
   relay.set(true);
   relay.setCallback(relayCB);
   
+  config.init();
   config.load();
 
   coreFreq = ESP.getCpuFreqMHz();
@@ -790,7 +791,7 @@ void initMDNS() {
  ****************************************************/
 void initMQTT() {
   mqttConnected = false;
-  char * serverAddress = config.mqtt_server;
+  char * serverAddress = config.mqttServer;
   if (strlen(serverAddress) == 0) {
     logger.log(ERROR, "Sth wrong with mqtt Server");
     return;
