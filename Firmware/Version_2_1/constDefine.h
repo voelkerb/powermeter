@@ -10,6 +10,7 @@
 #define VERSION "2.1"
 
 #define SEND_INFO_ON_CLIENT_CONNECT
+// #define USE_SERIAL
 // #define CMD_OVER_SERIAL
 
 // Default values
@@ -18,6 +19,10 @@
 #define STANDARD_TCP_STREAM_PORT 54322
 #define DEFAULT_SR 4000
 
+// Correction threshold in s
+#define NTP_CORRECT_SAMPLINGRATE
+#define CORRECT_SAMPLING_THRESHOLD 0.005
+#define MAX_CORRECT_SAMPLES 5
 
 // Location time difference between us (Freiburg, Germany) and NTP time 
 #define LOCATION_TIME_OFFSET 3600//7200 // 2 hours or (2*60*60)
@@ -62,7 +67,9 @@ const int RTC_RST = 32;
 
 
 // Buffering stuff
-#define MAX_SEND_SIZE 2048
+// Should be power of 2
+// #define MAX_SEND_SIZE 2048
+#define MAX_SEND_SIZE 1024
 // PSRAM Buffer
 const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define COMMAND_MAX_SIZE 500

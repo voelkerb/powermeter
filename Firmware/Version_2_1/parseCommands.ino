@@ -36,9 +36,11 @@ void handleEvent(Stream * getter) {
       response = LOG_PREFIX + response;
       getter->println(response.c_str());
 
-      if ((Stream*)&Serial != getter) {
-        serialLog.log(response.c_str());
-      }
+      #ifdef USE_SERIAL
+        if ((Stream*)&Serial != getter) {
+          serialLog.log(response.c_str());
+        }
+      #endif
       // This will be too long for the logger
       // logger.log(response.c_str());
     }
@@ -259,7 +261,7 @@ void handleJSON() {
         }
         docSend["msg"] = String(response);
         return;
-      }
+      } 
       docSend["error"] = false;
       state = next_state;
       // UDP packets are not allowed to exceed 1500 bytes, so keep size reasonable
@@ -319,8 +321,6 @@ void handleJSON() {
       if (ringBuffer.available() < chunk) {
         return;
       }
-      Serial.println("Sending... ");
-      Serial.printf("%u(avail), %u(chunk)\n", ringBuffer.available(), chunk);
       long start = millis();
       // Send the chunk of data
       if (streamConfig.stream == StreamType::TCP){
@@ -328,7 +328,6 @@ void handleJSON() {
       } else if (streamConfig.stream == StreamType::UDP){
         writeData(udpClient, chunk);
       }
-      Serial.printf("Took %ums\n", millis()-start);
     }
   }
 
@@ -384,11 +383,13 @@ void handleJSON() {
         streamLog[i]->setLogType(newLogType);
       }
     }
-    if (newGetter == (Stream*)&Serial) {
-      found = -1;
-      serialLog._type = newLogType;
-      serialLog.setLogType(newLogType);
-    }
+    #ifdef USE_SERIAL
+      if (newGetter == (Stream*)&Serial) {
+        found = -1;
+        serialLog._type = newLogType;
+        serialLog.setLogType(newLogType);
+      }
+    #endif
     if (found <= -2) {
       docSend["msg"] = "getter not related to logger";
       return;
@@ -667,7 +668,12 @@ void handleJSON() {
   /*********************** NTP COMMAND ****************************/
   // e.g. {"cmd":"ntp"}
   else if (strcmp(cmd, CMD_NTP) == 0) {
-    if (myTime.updateNTPTime(true)) {
+    bool bg = false;
+    JsonVariant bgVariant = root["payload"]["bg"];
+    if (!bgVariant.isNull()) {
+      bg = docRcv["payload"]["bg"].as<bool>();
+    }
+    if (myTime.updateNTPTime(not bg)) {
       docSend["msg"] = "Time synced";
       docSend["error"] = false;
     } else {

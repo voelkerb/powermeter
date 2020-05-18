@@ -30,12 +30,15 @@
 
 // Function prototypes required for e.g. platformio
 void IRAM_ATTR sample_ISR();
-void IRAM_ATTR sqwvTriggered();
+void IRAM_ATTR sqwvTriggered(void* instance);
+void ntpSynced();
 
 TaskHandle_t xHandle = NULL;
 
-// Serial logger
-StreamLogger serialLog((Stream*)&Serial, &timeStr, &LOG_PREFIX_SERIAL[0], ALL);
+#ifdef USE_SERIAL
+  // Serial logger
+  StreamLogger serialLog((Stream*)&Serial, &timeStr, &LOG_PREFIX_SERIAL[0], ALL);
+#endif
 // SPIFFS logger
 SPIFFSLogger spiffsLog(false, &LOG_FILE[0], &timeStr, &LOG_PREFIX_SERIAL[0], WARNING);
 
@@ -48,7 +51,7 @@ Configuration config;
 Relay relay(RELAY_PIN_S, RELAY_PIN_R);
 
 Rtc rtc(RTC_INT);
-TimeHandler myTime(config.timeServer, LOCATION_TIME_OFFSET, &rtc);
+TimeHandler myTime(config.timeServer, LOCATION_TIME_OFFSET, &rtc, &ntpSynced);
 
 // STPM Object
 STPM stpm34(STPM_RES, STPM_CS, STPM_SYN);
@@ -104,6 +107,8 @@ struct StreamConfig {
 };
 bool rts; // ready to send
 
+int correctSamples = 0;
+
 char measureStr[MAX_MEASURE_STR_LENGTH] = {'\0'};
 char unitStr[MAX_UNIT_STR_LENGTH] = {'\0'};
 
@@ -154,6 +159,7 @@ long mqttUpdate = millis();
 // HW Timer and mutex for sapmpling ISR
 hw_timer_t * timer = NULL;
 portMUX_TYPE counterMux = portMUX_INITIALIZER_UNLOCKED;
+portMUX_TYPE correctionMux = portMUX_INITIALIZER_UNLOCKED;
 SemaphoreHandle_t stpm_mutex;
 // Current CPU speed
 unsigned int coreFreq = 0;
@@ -167,6 +173,7 @@ uint16_t testSamples = 0;
 portMUX_TYPE sqwMux = portMUX_INITIALIZER_UNLOCKED;
 bool firstSqwv = true;
 volatile int sqwCounter = 0;
+volatile int sqwCounter2 = 0;
 
 volatile float values[4] = {0};
 
@@ -205,16 +212,27 @@ void setup() {
   config.load();
   relay.set(config.getRelayState());
 
-  // Setup serial communication
-  Serial.begin(SERIAL_SPEED);
+  #ifdef USE_SERIAL
+    // Setup serial communication
+    #ifdef CMD_OVER_SERIAL
+      Serial.begin(SERIAL_SPEED);
+    #else
+      // Disable receiving, as this also disbles an interrupt which might occur
+      // multiple times a second due to emi signals on the boards (due to bad shielding)
+      Serial.begin(SERIAL_SPEED, SERIAL_8N1, SERIAL_TX_ONLY, 1);
+      Serial.begin(SERIAL_SPEED, SERIAL_8N1, -1, 1, false); // FTDI 12Mbaud
+    #endif
+  #endif
 
   // At first init the rtc module to get a time behavior
   bool successAll = true;
   bool success = rtc.init();
   // Init the logging modules
   logger.setTimeGetter(&timeStr);
+  #ifdef USE_SERIAL
   // Add Serial logger
   logger.addLogger(&serialLog);
+  #endif
   // Add spiffs logger
   logger.addLogger(&spiffsLog);
   // Init all loggers
@@ -533,7 +551,12 @@ void sendDeviceInfo(Stream * sender) {
   }
   ssids += "]";
   docSend["ssids"] = ssids;
-  docSend["ssid"] = WiFi.SSID();
+  if (not Network::ethernet) {
+    docSend["ssid"] = WiFi.SSID();
+    docSend["rssi"] = WiFi.RSSI();
+    docSend["bssid"] = Network::getBSSID();
+  }
+  WiFi.RSSI();
   response = "";
   serializeJson(docSend, response);
   response = LOG_PREFIX + response;
@@ -695,7 +718,7 @@ void onSampling() {
     // NOTE: is this valid?
     // TODO: can we reset the sqwv somehow?
     if (firstSqwv) firstSqwv = false;
-    testMillis = testMillis2;
+    // testMillis = testMillis2;
   }
 
   // Output sampling frequency regularly
@@ -767,6 +790,7 @@ void onWifiConnect() {
     // Reinit mdns
     initMDNS();
     // The stuff todo if we have a network connection (and hopefully internet as well)
+    // myTime.updateNTPTime(true); TODO: This breaks everything with the first 5 powermeters 8-13 WTF
     myTime.updateNTPTime();
     mqttUpdate = millis() + MQTT_UPDATE_INTERVAL;
     if (!mqtt.connect()) logger.log(ERROR, "Cannot connect to MQTT Server %s", mqtt.ip);
@@ -860,13 +884,10 @@ void writeChunks(bool tail) {
  * handling
  ****************************************************/
 void writeChunksUDP(bool tail) {
-  uint32_t start = millis();
-  while(ringBuffer.available() > streamConfig.chunkSize and millis()-start < 15) {
-    start = millis();
+  while(ringBuffer.available() > streamConfig.chunkSize) {
     udpClient.beginPacket(streamConfig.ip, streamConfig.port);
     writeData(udpClient, streamConfig.chunkSize);
     udpClient.endPacket();
-    Serial.printf("%ums\n", millis()-start);
   }
   if (tail) {
     while(ringBuffer.available() > streamConfig.chunkSize) {
@@ -935,10 +956,6 @@ void writeData(Stream &getter, uint16_t size) {
   // long sendDone = micros();
   if (sent > start) sentSamples += (sent-start)/streamConfig.measurementBytes;
   // long allDone = micros();
-  // serialLog.log("prefix: %uus", prefixDone-startDone);
-  // serialLog.log("read: %uus", readDone-prefixDone);
-  // serialLog.log("send: %uus", sendDone-readDone);
-  // serialLog.log("Total: %uus", allDone-startDone);
 }
 
 void test(bool tail) {
@@ -955,26 +972,138 @@ void test(bool tail) {
  ****************************************************/
 static SemaphoreHandle_t timer_sem;
 volatile uint32_t mytime = micros();
+xQueueHandle xQueue = xQueueCreate(1000, sizeof(bool));
+bool volatile IRAM_timeout = false;
+void IRAM_ATTR sample_ISR2() {
+  if (counter < streamConfig.samplingRate) {
+    // Vaiables for frequency count
+    portENTER_CRITICAL_ISR(&counterMux);
+    counter++;
+    portEXIT_CRITICAL(&counterMux);
+
+    BaseType_t xHigherPriorityTaskWoken;
+    bool success = false;
+    BaseType_t xStatus = xQueueSendToBackFromISR( xQueue, &success, &xHigherPriorityTaskWoken );
+    
+    // BaseType_t xStatus = xQueueSendToBack( xQueue, &data, 10 );
+    // check whether sending is ok or not
+    if( xStatus == pdPASS ) {
+    } else {
+      IRAM_timeout = true;
+    }
+  }
+  xTaskResumeFromISR( xHandle );
+}
 
 void IRAM_ATTR sample_ISR() {
   static BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-  // Vaiables for frequency count
-  portENTER_CRITICAL_ISR(&counterMux);
-  counter++;
-  portEXIT_CRITICAL(&counterMux);
-
-  //Serial.println("TIMERISR");
-  // mytime = micros();
-  xSemaphoreGiveFromISR(timer_sem, &xHigherPriorityTaskWoken);
-  if ( xHigherPriorityTaskWoken) {
-    portYIELD_FROM_ISR(); // this wakes up sample_timer_task immediately
+  if (counter < streamConfig.samplingRate) {
+    
+    xSemaphoreGiveFromISR(timer_sem, &xHigherPriorityTaskWoken);
+    if ( xHigherPriorityTaskWoken) {
+      portYIELD_FROM_ISR(); // this wakes up sample_timer_task immediately
+    }
   }
+}
+
+/****************************************************
+ * RTOS task for handling a new sample
+ ****************************************************/
+bool QueueTimeout = false;
+void sample_timer_task2( void * parameter) {
+  vTaskSuspend( NULL );  // ISR wakes up the task
+
+  float data[4] = { 0.0 };
+
+  int test = 0;
+  bool success = false;
+  while(state != SampleState::IDLE){
+
+    BaseType_t xStatus = xQueueReceive( xQueue, &success, 0);
+
+    if(xStatus == pdPASS) {
+
+      if (counter >= streamConfig.samplingRate) {
+        freqCalcNow = micros();
+        freq = freqCalcNow-freqCalcStart;
+        freqCalcStart = freqCalcNow;
+        // if (rtc.connected) timerAlarmDisable(timer);
+        if(IRAM_timeout) {
+          logger.log(ERROR, "Lost interrupt!");
+          IRAM_timeout = false;
+        }
+
+        if(QueueTimeout) {
+          logger.log(ERROR, "Queue timeout!");
+          QueueTimeout = false;
+        }
+      }
+
+      
+      int samplesToTake = 1;
+      // If we are in the middle of a second sqwv
+      if (totalSamples % streamConfig.samplingRate == 1) {
+        // samplesCorrect > 0 means we have too less samples
+        // samplesCorrect < 0 means we have too much samples
+        // If we have to coorect samples upwards
+        if (correctSamples > 0) {
+          samplesToTake++;
+          portENTER_CRITICAL_ISR(&correctionMux);
+          correctSamples--;
+          portEXIT_CRITICAL_ISR(&correctionMux);
+        } else if (correctSamples < 0) {
+          samplesToTake--;
+          portENTER_CRITICAL_ISR(&correctionMux);
+          correctSamples++;
+          portEXIT_CRITICAL_ISR(&correctionMux);
+        }
+      } 
+
+      // Lock stpm before using it
+      // xSemaphoreTake(stpm_mutex, portMAX_DELAY);
+      // With correction, this should normally be 1
+      for (int i = 0; i < samplesToTake; i++) {
+        totalSamples++;
+
+        if (streamConfig.measures == Measures::VI) {
+          stpm34.readVoltAndCurr((float*) &data[0]);
+          // stpm34.readVoltageAndCurrent(1, (float*) &values[0], (float*) &values[1]);
+        } else if (streamConfig.measures == Measures::PQ) {
+          stpm34.readPower(1, (float*) &data[0], (float*) &data[2], (float*) &data[1], (float*) &data[2]);
+        } else if (streamConfig.measures == Measures::VIPQ) {
+          stpm34.readAll(1, (float*) &data[0], (float*) &data[1], (float*) &data[2], (float*) &data[3]);
+        } else if (streamConfig.measures == Measures::VI_RMS) {
+          stpm34.readRMSVoltageAndCurrent(1, (float*) &data[0], (float*) &data[1]);
+        }
+
+        bool success = ringBuffer.write((uint8_t*)&data[0], streamConfig.measurementBytes);
+        if (!success) {
+          ringBuffer.reset();
+          uint32_t lostSamples = ringBuffer.getSize()/streamConfig.measurementBytes;
+          logger.log(ERROR, "Overflow during ringBuffer write, lost %lu samples", lostSamples);
+          // Maybe for long term recordning, we restart here as data is corrupt no matter what we do now...
+          ESP.restart();
+        }
+      }
+      // Unlock stpm 
+      // xSemaphoreGive(stpm_mutex);
+
+    } else {
+      QueueTimeout = true;
+    }
+
+    if(!uxQueueMessagesWaiting(xQueue)) {
+      vTaskSuspend( NULL );  // release computing time, ISR wakes up the task.
+    }
+  }
+  vTaskDelete( NULL );
 }
 
 /****************************************************
  * RTOS task for sampling
  ****************************************************/
+
 void IRAM_ATTR sample_timer_task(void *param) {
   timer_sem = xSemaphoreCreateBinary();
 
@@ -984,48 +1113,114 @@ void IRAM_ATTR sample_timer_task(void *param) {
 
   while (state == SampleState::SAMPLE) {
     xSemaphoreTake(timer_sem, portMAX_DELAY);
-    // test++;
-    // if (test%100 == 0) {
-    //   Serial.printf("%lu\n", dur);
-    // }
-    // Lock stpm before using it
-    xSemaphoreTake(stpm_mutex, portMAX_DELAY);
+
+    // Vaiables for frequency count
+    portENTER_CRITICAL_ISR(&counterMux);
+    counter++;
+    portEXIT_CRITICAL(&counterMux);
     
 
     if (counter >= streamConfig.samplingRate) {
       freqCalcNow = micros();
       freq = freqCalcNow-freqCalcStart;
       freqCalcStart = freqCalcNow;
-      if (rtc.connected) timerAlarmDisable(timer);
+      // if (rtc.connected) timerAlarmDisable(timer);
     }
 
-    totalSamples++;
-    if (streamConfig.measures == Measures::VI) {
-      stpm34.readVoltAndCurr((float*) &data[0]);
-      // stpm34.readVoltageAndCurrent(1, (float*) &values[0], (float*) &values[1]);
-    } else if (streamConfig.measures == Measures::PQ) {
-      stpm34.readPower(1, (float*) &data[0], (float*) &data[2], (float*) &data[1], (float*) &data[2]);
-    } else if (streamConfig.measures == Measures::VIPQ) {
-      stpm34.readAll(1, (float*) &data[0], (float*) &data[1], (float*) &data[2], (float*) &data[3]);
-    } else if (streamConfig.measures == Measures::VI_RMS) {
-      stpm34.readRMSVoltageAndCurrent(1, (float*) &data[0], (float*) &data[1]);
-    }
+    int samplesToTake = 1;
+    // If we are in the middle of a second sqwv
+    if (totalSamples % streamConfig.samplingRate == 1) {
+      // samplesCorrect > 0 means we have too less samples
+      // samplesCorrect < 0 means we have too much samples
+      // If we have to coorect samples upwards
+      if (correctSamples > 0) {
+        samplesToTake++;
+        portENTER_CRITICAL_ISR(&correctionMux);
+        correctSamples--;
+        portEXIT_CRITICAL_ISR(&correctionMux);
+      } else if (correctSamples < 0) {
+        samplesToTake--;
+        portENTER_CRITICAL_ISR(&correctionMux);
+        correctSamples++;
+        portEXIT_CRITICAL_ISR(&correctionMux);
+      }
+    } 
+    // Lock stpm before using it
+    // xSemaphoreTake(stpm_mutex, portMAX_DELAY);
+    // With correction, this should normally be 1
+    for (int i = 0; i < samplesToTake; i++) {
+      totalSamples++;
 
-    bool success = ringBuffer.write((uint8_t*)&data[0], streamConfig.measurementBytes);
-    if (!success) {
-      ringBuffer.reset();
-      uint32_t lostSamples = ringBuffer.getSize()/streamConfig.measurementBytes;
-      logger.log(ERROR, "Overflow during ringBuffer write, lost %lu samples", lostSamples);
+      if (streamConfig.measures == Measures::VI) {
+        stpm34.readVoltAndCurr((float*) &data[0]);
+        // stpm34.readVoltageAndCurrent(1, (float*) &values[0], (float*) &values[1]);
+      } else if (streamConfig.measures == Measures::PQ) {
+        stpm34.readPower(1, (float*) &data[0], (float*) &data[2], (float*) &data[1], (float*) &data[2]);
+      } else if (streamConfig.measures == Measures::VIPQ) {
+        stpm34.readAll(1, (float*) &data[0], (float*) &data[1], (float*) &data[2], (float*) &data[3]);
+      } else if (streamConfig.measures == Measures::VI_RMS) {
+        stpm34.readRMSVoltageAndCurrent(1, (float*) &data[0], (float*) &data[1]);
+      }
+
+      bool success = ringBuffer.write((uint8_t*)&data[0], streamConfig.measurementBytes);
+      if (!success) {
+        ringBuffer.reset();
+        uint32_t lostSamples = ringBuffer.getSize()/streamConfig.measurementBytes;
+        logger.log(ERROR, "Overflow during ringBuffer write, lost %lu samples", lostSamples);
+        // Maybe for long term recordning, we restart here as data is corrupt no matter what we do now...
+        ESP.restart();
+      }
     }
     // Unlock stpm 
-    xSemaphoreGive(stpm_mutex);
+    // xSemaphoreGive(stpm_mutex);
 
   }
   vTaskDelete( NULL );
 }
 
-uint64_t oc = ESP.getCycleCount();
-uint32_t dur = 0;
+
+
+
+
+/****************************************************
+ * Setting up the SQWV Interrupt must be done on 
+ * core 0 because internally it starts stops the other
+ * interrupt, this must be done on same core
+ ****************************************************/
+const gpio_num_t rtc_int_pin = (gpio_num_t)RTC_INT;
+
+void setupSqwvInterrupt() {
+  rtc.enableRTCSqwv(1);
+  gpio_install_isr_service(3);
+
+  // Configure interrupt for low level
+  gpio_config_t config = {
+		.pin_bit_mask = 1ull << rtc_int_pin,
+		.mode = GPIO_MODE_INPUT,
+		.pull_up_en = GPIO_PULLUP_DISABLE,
+		.pull_down_en = GPIO_PULLDOWN_DISABLE,
+		.intr_type = GPIO_INTR_DISABLE
+	};
+	ESP_ERROR_CHECK(gpio_config(&config));
+  esp_err_t err;
+  
+  err = gpio_set_intr_type(rtc_int_pin, GPIO_INTR_POSEDGE);
+  if (err != ESP_OK) logger.log(ERROR, "set intr type sqwv failed with error 0x%x", err);
+
+  err = gpio_isr_handler_add(rtc_int_pin, &sqwvTriggered, (void *) nullptr);
+  if (err != ESP_OK) logger.log(ERROR, "sqwv isr failed with error 0x%x", err);
+}
+
+
+/****************************************************
+ * Disable the SQWV Interrupt
+ ****************************************************/
+void disableSqwvInterrupt() {
+  gpio_isr_handler_remove(rtc_int_pin);
+  gpio_uninstall_isr_service();
+}
+
+
 
 /****************************************************
  * A SQWV signal from the RTC is generated, we
@@ -1033,111 +1228,52 @@ uint32_t dur = 0;
  * on sampling make sure that we achieve
  * the appropriate <samplingrate> samples each second
  ****************************************************/
-void IRAM_ATTR sqwvTriggered() {
-  // uint64_t cc = ESP.getCycleCount();
-  // dur = cc-oc;
-  // oc = cc;
-  // Serial.printf("%lu\n", dur);
-  // Disable timer if not already done in ISR
-  timerAlarmDisable(timer);
-  timerWrite(timer, 0);
-  // Reset counter if not already done in ISR
-  portENTER_CRITICAL_ISR(&counterMux);
-  testSamples = counter;
-  counter = 0;
-  portEXIT_CRITICAL(&counterMux);
+volatile bool sqwvIsHigh = true;
+long lastSqwvTime = millis();
+void IRAM_ATTR sqwvTriggered(void * instance) {
+  if (sqwvIsHigh) {
+    gpio_set_intr_type(rtc_int_pin, GPIO_INTR_LOW_LEVEL);
+		sqwvIsHigh = false;
   
-  // timerAlarmWrite(timer, TIMER_CYCLES_FAST, true);
-  // We take one sample and enable the timing interrupt afterwards
-  // this should allow the ISR e.g. at 4kHz to take 3999 samples during the next second
-  // timerWrite(timer, 0);
-  sample_ISR();
-  // Enable timer
-  timerAlarmEnable(timer);
-  // indicate to main that a second has passed and store time 
-  portENTER_CRITICAL_ISR(&sqwMux);
-  sqwCounter++;
-  portEXIT_CRITICAL(&sqwMux);
-  testMillis2 = millis();
-}
+    // This is the low triggered interrupt we are talking about
+    // long now = millis();
+    // portENTER_CRITICAL_ISR(&criticalMsgMux);
+    // criticalMsgAvailable = true;
+    // testMillis2 = now-lastSqwvTime;
+    // portEXIT_CRITICAL_ISR(&criticalMsgMux);
+    // lastSqwvTime = now;
 
-/****************************************************
- * Setup the OTA updates progress
- ****************************************************/
-// To display only full percent updates
-unsigned int oldPercent = 0;
-void setupOTA() {
-  // Same name as mdns
-  ArduinoOTA.setHostname(config.name);
-  ArduinoOTA.setPassword("energy"); 
-  // Password can be set with it's md5 value as well
-  // MD5(admin) = 21232f297a57a5a743894a0e4a801fc3
-  // ArduinoOTA.setPasswordHash(2"21232f297a57a5a743894a0e4a801fc3");
-
-  ArduinoOTA.onStart([]() {
-    updating = true;
-    Network::allowNetworkChange = false;
-    logger.log("Start updating");
-
-    if (state != SampleState::IDLE) {
-      logger.log(WARNING, "Stop Sampling, Update Requested");
-      stopSampling();
-      // Write remaining chunks with tailr
-      if (outputWriter != NULL) outputWriter(true);
-      docSend["msg"] = F("Received stop command");
-      docSend["sample_duration"] = samplingDuration;
-      docSend["samples"] = totalSamples;
-      docSend["sent_samples"] = sentSamples;
-      docSend["start_ts"] = myTime.timestampStr(streamConfig.startTs);
-      docSend["stop_ts"] = myTime.timestampStr(streamConfig.stopTs);
-      docSend["ip"] = WiFi.localIP().toString();
-      docSend["avg_rate"] = totalSamples/(samplingDuration/1000.0);
-      docSend["cmd"] = CMD_STOP;
-    }
-
-    // Disconnecting all connected clients
-    for (size_t i = 0; i < MAX_CLIENTS; i++) {
-      if (clientConnected[i]) {
-        onClientDisconnect(client[i], i);
-        clientConnected[i] = false;
-      }
-    }
-    if (exStreamServer.connected()) exStreamServer.stop();
-    if (streamClient.connected()) streamClient.stop();
+    // Disable timer if not already done in ISR
+    timerAlarmDisable(timer);
+    timerWrite(timer, 0);
+    // Reset counter if not already done in ISR
+    portENTER_CRITICAL_ISR(&counterMux);
+    testSamples = counter;
+    counter = 0;
+    portEXIT_CRITICAL(&counterMux);
     
-    // Stopping all other tcp stuff
-    streamServer.stop();
-    streamServer.close();
-    server.stop();
-    server.close();
-    mqtt.disconnect();
-  });
+    // timerAlarmWrite(timer, TIMER_CYCLES_FAST, true);
+    // We take one sample and enable the timing interrupt afterwards
+    // this should allow the ISR e.g. at 4kHz to take 3999 samples during the next second
+    // timerWrite(timer, 0);
+    
+    // indicate to main that a second has passed and store time 
+    portENTER_CRITICAL_ISR(&sqwMux);
+    sqwCounter++;
+    sqwCounter2++;
+    portEXIT_CRITICAL(&sqwMux);
 
-  ArduinoOTA.onEnd([]() {
-    Serial.println("End");
-  });
-
-  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    unsigned int percent = (progress / (total / 100));
-    if (percent != oldPercent) {
-      Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
-      oldPercent = percent;
-    }
-  });
-  
-  ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("Error[%u]: ", error);
-    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
-    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
-    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-    else if (error == OTA_RECEIVE_ERROR)Serial.println("Receive Failed");
-    else if (error == OTA_END_ERROR) Serial.println("End Failed");
-    // No matter what happended, simply restart
-    ESP.restart();
-  });
-  // Enable OTA
-  ArduinoOTA.begin();
+    sample_ISR();
+    // timerWrite(timer, TIMER_CYCLES_FAST-1);
+    // Enable timer
+    timerAlarmEnable(timer);
+    // testMillis2 = millis();
+  } else {
+		gpio_set_intr_type(rtc_int_pin, GPIO_INTR_HIGH_LEVEL);
+		sqwvIsHigh = true;
+	}
 }
+
 
 /****************************************************
  * Stop Sampling will go into ide state, stop the
@@ -1145,7 +1281,10 @@ void setupOTA() {
  * will send EOF to the client
  ****************************************************/
 void stopSampling() {
-  if (rtc.connected) rtc.disableInterrupt();
+  if (rtc.connected) {
+    // rtc.disableInterrupt();
+    disableSqwvInterrupt();
+  }
   state = SampleState::IDLE;
   next_state = SampleState::IDLE;
   // Stop the timer interrupt
@@ -1208,17 +1347,19 @@ void startSampling(bool waitVoltage) {
   // Reset all variables
   state = SampleState::SAMPLE;
   sampleCB();
-  xTaskCreatePinnedToCore(  sample_timer_task,     /* Task function. */
-    "Consumer",       /* String with name of task. */
-    4096,            /* Stack size in words. */
-    NULL,             /* Parameter passed as input of the task */
-    10,                /* Priority of the task. */
-    &xHandle,            /* Task handle. */
-    1);
+
+  // xTaskCreatePinnedToCore(  sample_timer_task,     /* Task function. */
+  //     "Consumer",       /* String with name of task. */
+  //     4096,            /* Stack size in words. */
+  //     NULL,             /* Parameter passed as input of the task */
+  //     10,                /* Priority of the task. */
+  //     &xHandle,            /* Task handle. */
+  //     1);
 
   counter = 0;
   sentSamples = 0;
   totalSamples = 0;
+  correctSamples = 0;
   // TIMER_CYCLES_FAST = (1000000) / streamConfig.samplingRate; // Cycles between HW timer inerrupts
   //             240Mhz      240       e.g. 4000Hz     
       
@@ -1230,7 +1371,13 @@ void startSampling(bool waitVoltage) {
   // This will reset the sqwv pin
   firstSqwv = true;
   sqwCounter = 0;
-  if (rtc.connected) rtc.enableInterrupt(1, sqwvTriggered);
+  sqwCounter2 = 0;
+    
+  if (rtc.connected) {
+    // rtc.enableInterrupt(1, sqwvTriggered); // TODO
+    setupSqwvInterrupt();
+  }
+  
   // If we should wait for voltage to make positive zerocrossing
   if (waitVoltage) {
     while(stpm34.readVoltage(1) > 0) {yield();}
@@ -1243,19 +1390,72 @@ void startSampling(bool waitVoltage) {
   turnInterrupt(true);
 }
 
+void turnInterrupt(bool on) {
+  if (on) {
+    xTaskCreatePinnedToCore(  sample_timer_task,     /* Task function. */
+        "Consumer",       /* String with name of task. */
+        10000,            /* Stack size in words. */
+        NULL,             /* Parameter passed as input of the task */
+        32,                /* Priority of the task. */ // Highest priority possible?
+        &xHandle,            /* Task handle. */
+        1);
+    xTaskCreatePinnedToCore(  startTimerInterrupt,     /* Task function. */
+        "startInterrupt",       /* String with name of task. */
+        4096,            /* Stack size in words. */
+        NULL,             /* Parameter passed as input of the task */
+        20,                /* Priority of the task. */
+        NULL,            /* Task handle. */
+        1);
+  } else {
+    xTaskCreatePinnedToCore(  stopTimerInterrupt,     /* Task function. */
+        "stopInterrupt",       /* String with name of task. */
+        4096,            /* Stack size in words. */
+        NULL,             /* Parameter passed as input of the task */
+        20,                /* Priority of the task. */
+        NULL,            /* Task handle. */
+        1);
+  }
+}
+
+void startTimerInterrupt( void * param ) {
+  cli();//stop interrupts
+  timer_init();
+  // The timer runs at 80 MHZ, independent of cpu clk
+  timerAlarmWrite(timer, TIMER_CYCLES_FAST, true);
+  timerWrite(timer, 0);
+  // Take first sample here
+  sample_ISR();
+  // Alternative to take first sample
+  // timerWrite(timer, TIMER_CYCLES_FAST-1);
+  timerAlarmEnable(timer);
+  sei();
+  vTaskDelete( NULL );
+}
+
+void stopTimerInterrupt( void * param ) {
+  cli();//stop interrupts
+  if (timer != NULL) timerAlarmDisable(timer);
+  timerEnd(timer);
+  timer = NULL;
+  sei();
+  vTaskDelete( NULL );
+}
+
 /****************************************************
  * Detach or attach sampling interupt
  ****************************************************/
-void turnInterrupt(bool on) {
+void turnInterrupt2(bool on) {
   cli();//stop interrupts
   if (on) {
     timer_init();
     // The timer runs at 80 MHZ, independent of cpu clk
     timerAlarmWrite(timer, TIMER_CYCLES_FAST, true);
     timerWrite(timer, 0);
+    // Take first sample here
+    sample_ISR();
+    // Alternative to take first sample
+    // timerWrite(timer, TIMER_CYCLES_FAST-1);
     timerAlarmEnable(timer);
-    uint64_t microsTimer = timerAlarmReadMicros(timer);
-    logger.log("microsTimer: %uus", microsTimer);
   } else {
     if (timer != NULL) timerAlarmDisable(timer);
     timerEnd(timer);
@@ -1303,6 +1503,7 @@ void initMDNS() {
 TaskHandle_t streamServerTaskHandle = NULL;
 void checkStreamServer(void * pvParameters) {
   bool first = true;
+  vTaskDelay(STREAM_SERVER_UPDATE_INTERVAL/10);
   while (not updating) {
     if (!exStreamServer.connected()                         // If not already connected
         and state == SampleState::IDLE                      // and in idle mode
@@ -1312,15 +1513,13 @@ void checkStreamServer(void * pvParameters) {
         logger.log("Connected to StreamServer: %s", config.streamServer);
         onClientConnect(exStreamServer);
       } else {
-        // Serial.printf("Ss server connection failed\n");
         if (first) {
           logger.log(WARNING, "Cannot connect to StreamServer: %s", config.streamServer);
           first = false;
         }
       }
     } else {
-      // Serial.printf("prequisitfailed: %i, %i\n", exStreamServer.connected(), state == SampleState::IDLE); 
-
+      
     }
     
     vTaskDelay(STREAM_SERVER_UPDATE_INTERVAL);
@@ -1425,4 +1624,144 @@ void sampleCB() {
   }
   // Do not allow network changes on sampling
   Network::allowNetworkChange = state==SampleState::SAMPLE ? false : true;
+}
+
+
+
+/****************************************************
+ * Display sampling information to logger
+ ****************************************************/
+void samplingCheck() {
+  if (state != SampleState::IDLE) {
+    unsigned long _totalSamples = totalSamples;
+    Timestamp now = myTime.timestamp();
+    uint32_t durationMs = (now.seconds - streamConfig.startTs.seconds)*1000;
+    durationMs += (int(now.milliSeconds) - int(streamConfig.startTs.milliSeconds));
+    float avgRate = _totalSamples/(durationMs/1000.0);
+    uint32_t _goalSamples = float(durationMs/1000.0)*streamConfig.samplingRate;
+    int samplesOff = int(_goalSamples - _totalSamples);
+    float secondsOff = float(samplesOff)/float(streamConfig.samplingRate);
+    logger.log(INFO, "After NTP Sync: avg rate %.3f Hz", avgRate);
+    LogType type = LogType::INFO;
+    if (abs(secondsOff) > 0.02) type = LogType::WARNING;
+    logger.log(type, "Should be: %lu, is %lu samples", _goalSamples, _totalSamples);
+    logger.log(type, "Offset of %.3f s, SecondInterrupts %i, SamplingDur %.3f", secondsOff, sqwCounter2, float(durationMs/1000.0));
+    logger.log(INFO, "From %s", myTime.timestampStr(streamConfig.startTs));
+    logger.log(INFO, "To %s",  myTime.timestampStr(now));
+
+    #ifdef NTP_CORRECT_SAMPLINGRATE
+    if (abs(secondsOff) >= CORRECT_SAMPLING_THRESHOLD) correctSampling(samplesOff);
+    #endif
+  }
+}
+
+void correctSampling(int samplesToCorrect) {
+  int samplesCorrect = samplesToCorrect;
+  // Cap it so that signal will not be distored too much
+  if (samplesCorrect > MAX_CORRECT_SAMPLES) samplesCorrect = MAX_CORRECT_SAMPLES;
+  else if (samplesCorrect < -MAX_CORRECT_SAMPLES) samplesCorrect = -MAX_CORRECT_SAMPLES;
+  // samplesCorrect > 0 means we have too less samples
+  // samplesCorrect < 0 means we have too much samples
+  portENTER_CRITICAL(&correctionMux);
+  correctSamples += samplesCorrect;
+  portEXIT_CRITICAL(&correctionMux);
+  logger.log(WARNING, "Correcting: %i samples", samplesCorrect);
+}
+
+/****************************************************
+ * Callback when NTP syncs happened
+ ****************************************************/
+void ntpSynced() {
+  logger.log(INFO, "NTP synced");
+  if (state != SampleState::IDLE) samplingCheck();
+}
+
+
+/****************************************************
+ * Setup the OTA updates progress
+ ****************************************************/
+// To display only full percent updates
+unsigned int oldPercent = 0;
+void setupOTA() {
+  // Same name as mdns
+  ArduinoOTA.setHostname(config.name);
+  ArduinoOTA.setPassword("energy"); 
+  // Password can be set with it's md5 value as well
+  // MD5(admin) = 21232f297a57a5a743894a0e4a801fc3
+  // ArduinoOTA.setPasswordHash(2"21232f297a57a5a743894a0e4a801fc3");
+
+  ArduinoOTA.onStart([]() {
+    updating = true;
+    Network::allowNetworkChange = false;
+    logger.log("Start updating");
+
+    if (state != SampleState::IDLE) {
+      logger.log(WARNING, "Stop Sampling, Update Requested");
+      stopSampling();
+
+      // // Write remaining chunks with tailr
+      // if (outputWriter != NULL) outputWriter(true);
+      // docSend["msg"] = F("Received stop command");
+      // docSend["sample_duration"] = samplingDuration;
+      // docSend["samples"] = totalSamples;
+      // docSend["sent_samples"] = sentSamples;
+      // docSend["start_ts"] = myTime.timestampStr(streamConfig.startTs);
+      // docSend["stop_ts"] = myTime.timestampStr(streamConfig.stopTs);
+      // docSend["ip"] = WiFi.localIP().toString();
+      // docSend["avg_rate"] = totalSamples/(samplingDuration/1000.0);
+      // docSend["cmd"] = CMD_STOP;
+
+      // serializeJson(docSend, response);
+      // response = LOG_PREFIX + response;
+      // if (sendStream) sendStream->println(response);
+    }
+
+    // Disconnecting all connected clients
+    for (size_t i = 0; i < MAX_CLIENTS; i++) {
+      if (clientConnected[i]) {
+        onClientDisconnect(client[i], i);
+        clientConnected[i] = false;
+      }
+    }
+    if (exStreamServer.connected()) exStreamServer.stop();
+    if (streamClient.connected()) streamClient.stop();
+    
+    // Stopping all other tcp stuff
+    streamServer.stop();
+    streamServer.close();
+    server.stop();
+    server.close();
+    mqtt.disconnect();
+  });
+
+  ArduinoOTA.onEnd([]() {
+    #ifdef USE_SERIAL
+    logger.log("End");
+    #endif
+  });
+
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    #ifdef USE_SERIAL
+    unsigned int percent = (progress / (total / 100));
+    if (percent != oldPercent) {
+      Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
+      oldPercent = percent;
+    }
+    #endif
+  });
+  
+  ArduinoOTA.onError([](ota_error_t error) {
+    #ifdef USE_SERIAL
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+    else if (error == OTA_RECEIVE_ERROR) Serial.prinln("Receive Failed");
+    else if (error == OTA_END_ERROR) Serial.println("End Failed");
+    #endif
+    // No matter what happended, simply restart
+    ESP.restart();
+  });
+  // Enable OTA
+  ArduinoOTA.begin();
 }
