@@ -31,7 +31,10 @@
 // Function prototypes required for e.g. platformio
 void IRAM_ATTR sample_ISR();
 void IRAM_ATTR sqwvTriggered(void* instance);
-void ntpSynced();
+void ntpSynced(unsigned int confidence);
+
+
+Relay relay(RELAY_PIN_S, RELAY_PIN_R);
 
 TaskHandle_t xHandle = NULL;
 
@@ -39,6 +42,8 @@ TaskHandle_t xHandle = NULL;
   // Serial logger
   StreamLogger serialLog((Stream*)&Serial, &timeStr, &LOG_PREFIX_SERIAL[0], ALL);
 #endif
+
+
 // SPIFFS logger
 SPIFFSLogger spiffsLog(false, &LOG_FILE[0], &timeStr, &LOG_PREFIX_SERIAL[0], WARNING);
 
@@ -47,8 +52,6 @@ SPIFFSLogger spiffsLog(false, &LOG_FILE[0], &timeStr, &LOG_PREFIX_SERIAL[0], WAR
 MultiLogger& logger = MultiLogger::getInstance();
 
 Configuration config;
-
-Relay relay(RELAY_PIN_S, RELAY_PIN_R);
 
 Rtc rtc(RTC_INT);
 TimeHandler myTime(config.timeServer, LOCATION_TIME_OFFSET, &rtc, &ntpSynced);
@@ -205,7 +208,8 @@ void (*outputWriter)(bool) = &writeChunks;
 /************************ SETUP *************************/
 void setup() {
   // Set realy to true
-  relay.set(true);
+  // bistable relay is left as is
+  // relay.set(true);
 
   // Load config, an set relay to wished state
   config.init();  
@@ -219,7 +223,7 @@ void setup() {
     #else
       // Disable receiving, as this also disbles an interrupt which might occur
       // multiple times a second due to emi signals on the boards (due to bad shielding)
-      Serial.begin(SERIAL_SPEED, SERIAL_8N1, SERIAL_TX_ONLY, 1);
+      // Serial.begin(SERIAL_SPEED, SERIAL_8N1, SERIAL_TX_ONLY, 1);
       Serial.begin(SERIAL_SPEED, SERIAL_8N1, -1, 1, false); // FTDI 12Mbaud
     #endif
   #endif
@@ -276,6 +280,7 @@ void setup() {
   stpm_mutex = xSemaphoreCreateMutex();
   // Setup STPM 32
   success = stpm34.init();
+  stpm34.setCalibration(config.calV, config.calI);
   if (!success) logger.log(ERROR, "STPM Init Failed");
   successAll &= success;
   
@@ -542,8 +547,14 @@ void sendDeviceInfo(Stream * sender) {
   docSend["buffer_size"] = ringBuffer.getSize();
   docSend["psram"] = ringBuffer.inPSRAM();
   docSend["rtc"] = rtc.connected;
+  docSend["calV"] = config.calV;
+  docSend["calI"] = config.calI;
   docSend["state"] = state != SampleState::IDLE ? "busy" : "idle";
   docSend["relay"] = relay.state;
+  JsonArray array = docSend.createNestedArray("calibration");
+  array.add(config.calV);
+  array.add(config.calI);
+
   String ssids = "[";
   for (size_t i = 0; i < config.numAPs; i++) {
     ssids += config.wifiSSIDs[i];
@@ -785,7 +796,7 @@ void onMQTTDisconnect() {
  ****************************************************/
 void onWifiConnect() {
   if (not Network::apMode) {
-    logger.log(ALL, "Wifi Connected");
+    logger.log(ALL, "Wifi Connected %s", Network::getBSSID());
     logger.log(ALL, "IP: %s", Network::localIP().toString().c_str());
     // Reinit mdns
     initMDNS();
@@ -920,7 +931,7 @@ void writeDataMQTT(bool tail) {
     ringBuffer.read((uint8_t*)&values[0], streamConfig.measurementBytes);
     // JsonArray array = docSend["values"].to<JsonArray>();
     // for (int i = 0; i < streamConfig.numValues; i++) objSample["values"][i] = values[i];
-    JsonArray array = objSample["values"].to<JsonArray>();
+    JsonArray array = docSend.createNestedArray("values");
     for (int i = 0; i < streamConfig.numValues; i++) array.add(values[i]);
     response = "";
     serializeJson(docSample, response);
@@ -962,7 +973,7 @@ void test(bool tail) {
   if (ringBuffer.available() > streamConfig.samplingRate*streamConfig.measurementBytes) {
     ringBuffer.reset();
     packetNumber++;
-    size_t test = snprintf((char*)&sendbuffer[0], SEND_BUF_SIZE, "Test: %s - %u\r\n", timeStr(), packetNumber);
+    size_t test = snprintf((char*)&sendbuffer[0], SEND_BUF_SIZE, "Test: %s - %lu\r\n", timeStr(), packetNumber);
     sendStream->write((uint8_t*)&sendbuffer[0], test);
   }
 }
@@ -1403,7 +1414,7 @@ void turnInterrupt(bool on) {
         "startInterrupt",       /* String with name of task. */
         4096,            /* Stack size in words. */
         NULL,             /* Parameter passed as input of the task */
-        20,                /* Priority of the task. */
+        2,                /* Priority of the task. */
         NULL,            /* Task handle. */
         1);
   } else {
@@ -1411,7 +1422,7 @@ void turnInterrupt(bool on) {
         "stopInterrupt",       /* String with name of task. */
         4096,            /* Stack size in words. */
         NULL,             /* Parameter passed as input of the task */
-        20,                /* Priority of the task. */
+        2,                /* Priority of the task. */
         NULL,            /* Task handle. */
         1);
   }
@@ -1496,7 +1507,7 @@ void initMDNS() {
 }
 
 /****************************************************
- * Check streamserver connection, sicne connect is 
+ * Check streamserver connection, since connect is 
  * a blocking task, we make it nonblocking using 
  * a separate freerots task
  ****************************************************/
@@ -1631,7 +1642,7 @@ void sampleCB() {
 /****************************************************
  * Display sampling information to logger
  ****************************************************/
-void samplingCheck() {
+int samplingCheck() {
   if (state != SampleState::IDLE) {
     unsigned long _totalSamples = totalSamples;
     Timestamp now = myTime.timestamp();
@@ -1649,10 +1660,9 @@ void samplingCheck() {
     logger.log(INFO, "From %s", myTime.timestampStr(streamConfig.startTs));
     logger.log(INFO, "To %s",  myTime.timestampStr(now));
 
-    #ifdef NTP_CORRECT_SAMPLINGRATE
-    if (abs(secondsOff) >= CORRECT_SAMPLING_THRESHOLD) correctSampling(samplesOff);
-    #endif
+    return samplesOff;
   }
+  return -1;
 }
 
 void correctSampling(int samplesToCorrect) {
@@ -1671,9 +1681,21 @@ void correctSampling(int samplesToCorrect) {
 /****************************************************
  * Callback when NTP syncs happened
  ****************************************************/
-void ntpSynced() {
-  logger.log(INFO, "NTP synced");
-  if (state != SampleState::IDLE) samplingCheck();
+void ntpSynced(unsigned int confidence) {
+  logger.log(INFO, "NTP synced with conf: %u", confidence);
+  // Confidence is time in ms for ntp round trip -> the smaller the better
+  if (state != SampleState::IDLE) {
+    int samplesOff = samplingCheck();
+    float secondsOff = float(samplesOff)/float(streamConfig.samplingRate);
+
+    #ifdef NTP_CORRECT_SAMPLINGRATE
+    if (confidence < NTP_CONFIDENCE_FOR_CORRECTION) {
+      if (abs(secondsOff) >= CORRECT_SAMPLING_THRESHOLD) {
+        correctSampling(samplesOff);
+      }
+    }
+    #endif
+  }
 }
 
 
@@ -1756,7 +1778,7 @@ void setupOTA() {
     if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
     else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
     else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-    else if (error == OTA_RECEIVE_ERROR) Serial.prinln("Receive Failed");
+    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
     else if (error == OTA_END_ERROR) Serial.println("End Failed");
     #endif
     // No matter what happended, simply restart

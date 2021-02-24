@@ -7,11 +7,9 @@
 #define SENT_LIFENESS_TO_CLIENTS
 
 
-#define VERSION "2.1"
+#define VERSION "2.0.1"
 
 #define SEND_INFO_ON_CLIENT_CONNECT
-// TODO:
-// #define USE_SERIAL
 // #define CMD_OVER_SERIAL
 
 // Default values
@@ -20,24 +18,17 @@
 #define STANDARD_TCP_STREAM_PORT 54322
 #define DEFAULT_SR 4000
 
-#define NTP_CORRECT_SAMPLINGRATE
-// Confidence threshold in ms
-#define NTP_CONFIDENCE_FOR_CORRECTION 25
-// Correction threshold in s
-#define CORRECT_SAMPLING_THRESHOLD 0.005
-#define MAX_CORRECT_SAMPLES 5
 
 // Location time difference between us (Freiburg, Germany) and NTP time 
 #define LOCATION_TIME_OFFSET 3600//7200 // 2 hours or (2*60*60)
 
 #define MDNS_UPDATE_INTERVAL 30000
-#define TCP_UPDATE_INTERVAL 1000
+#define TCP_UPDATE_INTERVAL 100
 #define LIFENESS_UPDATE_INTERVAL 1000
 #define RTC_UPDATE_INTERVAL 30000
 #define STREAM_SERVER_UPDATE_INTERVAL 30000
 #define MQTT_UPDATE_INTERVAL 5000
 
-#define MAX_CNT_BEFORE_DISCONNECT 3
 // We allow a max of 3 tcp clients for performance reasons
 #define MAX_CLIENTS 3
 
@@ -70,9 +61,7 @@ const int RTC_RST = 32;
 
 
 // Buffering stuff
-// Should be power of 2
-// #define MAX_SEND_SIZE 2048
-#define MAX_SEND_SIZE 1024
+#define MAX_SEND_SIZE 2048
 // PSRAM Buffer
 const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define COMMAND_MAX_SIZE 500
@@ -112,7 +101,6 @@ const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define CMD_STREAM_SERVER "streamServer"
 #define CMD_TIME_SERVER "timeServer"
 #define CMD_LOG_LEVEL "log"
-#define CMD_LOG_CALIBRATION "calibration"
 
 
 #define LOG_LEVEL_ALL "all"
@@ -125,10 +113,8 @@ const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define MQTT_TOPIC_BASE "powermeter"
 #define MQTT_TOPIC_SEPARATOR '/'
 #define MQTT_TOPIC_SWITCH "switch"
-#define MQTT_TOPIC_SWITCH_TS "switchTS"
 #define MQTT_TOPIC_SWITCH_ON "on"
 #define MQTT_TOPIC_SWITCH_OFF "off"
-#define MQTT_TOPIC_SWITCH_HANDLED "-"
 #define MQTT_TOPIC_SAMPLE "sample"
 #define MQTT_TOPIC_SAMPLING "sampling"
 #define MQTT_TOPIC_STATE "state"
