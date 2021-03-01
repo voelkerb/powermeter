@@ -1,30 +1,27 @@
-[submodule "Firmware/Version_2_1/src/time"]
+[submodule "Firmware/Version_2/src/time"]
 	path = Firmware/Version_2/src/time
 	url = https://github.com/voelkerb/ESP.timeHandling
-[submodule "Firmware/Version_2_1/src/multiLogger"]
+[submodule "Firmware/Version_2/src/multiLogger"]
 	path = Firmware/Version_2/src/multiLogger
 	url = https://github.com/voelkerb/ESP.multiLogger
-[submodule "Firmware/Version_2_1/src/stpm3x"]
+[submodule "Firmware/Version_2/src/stpm3x"]
 	path = Firmware/Version_2/src/stpm3x
 	url = https://github.com/voelkerb/STPM3X
-[submodule "Firmware/Version_2_1/src/network"]
+[submodule "Firmware/Version_2/src/network"]
 	path = Firmware/Version_2/src/network
 	url = https://github.com/voelkerb/ESP.unifiedNetwork
-[submodule "Firmware/Version_2_1/src/relay"]
+[submodule "Firmware/Version_2/src/relay"]
 	path = Firmware/Version_2/src/relay
 	url = https://github.com/voelkerb/bistableRelay
-[submodule "Firmware/Version_2_1/src/rtc"]
+[submodule "Firmware/Version_2/src/rtc"]
 	path = Firmware/Version_2/src/rtc
 	url = https://github.com/voelkerb/ESP.DS3231_RTC
-[submodule "Firmware/Version_2_1/src/ringbuffer"]
+[submodule "Firmware/Version_2/src/ringbuffer"]
 	path = Firmware/Version_2/src/ringbuffer
 	url = https://github.com/voelkerb/ringbuffer
-[submodule "Firmware/Version_2_1/src/mqtt"]
+[submodule "Firmware/Version_2/src/mqtt"]
 	path = Firmware/Version_2/src/mqtt
 	url = https://github.com/voelkerb/ESP.simpleMQTT
 [submodule "Firmware/Version_1/src/mqtt"]
 	path = Firmware/Version_1/src/mqtt
 	url = https://github.com/voelkerb/ESP.simpleMQTT
-[submodule "Firmware/Version_1/src/multiLogger"]
-	path = Firmware/Version_1/src/multiLogger
-	url = https://github.com/voelkerb/ringbuffer
