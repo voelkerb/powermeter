@@ -19,7 +19,7 @@
 #include "constDefine.h"
 #include "enums.h"
 #include "src/multiLogger/src/multiLogger.h"
-#include "src/rtc/src/DS3231_RTC.h"
+#include "src/DS3231_RTC/src/DS3231_RTC.h"
 #include "src/time/src/timeHandling.h"
 #include "src/stpm3x/src/STPM3X.h"
 #include "src/relay/src/relay.h"
