@@ -769,7 +769,7 @@ void onSampling() {
  * function. e.g. for logger class
  ****************************************************/
 char * timeStr() {
-  return myTime.timeStr(true);;
+  return myTime.timeStr(true);
 }
 
 /****************************************************
