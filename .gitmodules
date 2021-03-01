@@ -1,51 +1,30 @@
-[submodule "Firmware/Version_2_0/src/stpm"]
-	path = Firmware/Version_2_1/src/stpm
-	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.stpm
-[submodule "Firmware/Version_2_0/src/rtc"]
-	path = Firmware/Version_2_1/src/rtc
-	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.rtc
-[submodule "Firmware/Version_2_0/src/network"]
-	path = Firmware/Version_2_1/src/network
-	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.network
-[submodule "Firmware/Version_2_0/src/logger"]
-	path = Firmware/Version_2_1/src/logger
-	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.logger
-[submodule "Firmware/Version_2_0/src/time"]
-	path = Firmware/Version_2_1/src/time
-	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.time
-[submodule "Firmware/Version_2_0/src/relay"]
-	path = Firmware/Version_2_1/src/relay
-	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.relay
-[submodule "Firmware/Version_2_0/src/ringbuffer"]
-	path = Firmware/Version_2_1/src/ringbuffer
-	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.ringbuffer
-[submodule "Firmware/Version_2_0/src/config"]
-	path = Firmware/Version_2_1/src/config
-	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.config
-[submodule "Firmware/Version_1_2/src/logger"]
-	path = Firmware/Version_1_2/src/logger
-	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.logger
-[submodule "Firmware/Version_1_2/src/config"]
-	path = Firmware/Version_1_2/src/config
-	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.config
-[submodule "Firmware/Version_1_2/src/network"]
-	path = Firmware/Version_1_2/src/network
-	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.network
-[submodule "Firmware/Version_1_2/src/relay"]
-	path = Firmware/Version_1_2/src/relay
-	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.relay
-[submodule "Firmware/Version_1_2/src/ringbuffer"]
-	path = Firmware/Version_1_2/src/ringbuffer
-	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.ringbuffer
-[submodule "Firmware/Version_1_2/src/stpm"]
-	path = Firmware/Version_1_2/src/stpm
-	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.stpm
-[submodule "Firmware/Version_1_2/src/time"]
-	path = Firmware/Version_1_2/src/time
-	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.time
+[submodule "Firmware/Version_2_1/src/time"]
+	path = Firmware/Version_2/src/time
+	url = https://github.com/voelkerb/ESP.timeHandling
+[submodule "Firmware/Version_2_1/src/multiLogger"]
+	path = Firmware/Version_2/src/multiLogger
+	url = https://github.com/voelkerb/ESP.multiLogger
+[submodule "Firmware/Version_2_1/src/stpm3x"]
+	path = Firmware/Version_2/src/stpm3x
+	url = https://github.com/voelkerb/STPM3X
+[submodule "Firmware/Version_2_1/src/network"]
+	path = Firmware/Version_2/src/network
+	url = https://github.com/voelkerb/ESP.unifiedNetwork
+[submodule "Firmware/Version_2_1/src/relay"]
+	path = Firmware/Version_2/src/relay
+	url = https://github.com/voelkerb/bistableRelay
+[submodule "Firmware/Version_2_1/src/rtc"]
+	path = Firmware/Version_2/src/rtc
+	url = https://github.com/voelkerb/ESP.DS3231_RTC
+[submodule "Firmware/Version_2_1/src/ringbuffer"]
+	path = Firmware/Version_2/src/ringbuffer
+	url = https://github.com/voelkerb/ringbuffer
 [submodule "Firmware/Version_2_1/src/mqtt"]
-	path = Firmware/Version_2_1/src/mqtt
-	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.mqtt
-[submodule "Firmware/allDevicesSettingsSetter/src/logger"]
-	path = Firmware/allDevicesSettingsSetter/src/logger
-	url = https://projects.informatik.uni-freiburg.de/git/smartenergy.powermeter.logger
+	path = Firmware/Version_2/src/mqtt
+	url = https://github.com/voelkerb/ESP.simpleMQTT
+[submodule "Firmware/Version_1/src/mqtt"]
+	path = Firmware/Version_1/src/mqtt
+	url = https://github.com/voelkerb/ESP.simpleMQTT
+[submodule "Firmware/Version_1/src/multiLogger"]
+	path = Firmware/Version_1/src/multiLogger
+	url = https://github.com/voelkerb/ringbuffer

@@ -1,7 +1,5 @@
 **/.vscode/
 
-**/*.mkv
-
 **/tmp_*
 
 **/.DS_Store
