@@ -631,7 +631,7 @@ void handleJSON() {
       String ssids = "[";
       for (size_t i = 0; i < config.netConf.numAPs; i++) {
         ssids += config.netConf.SSIDs[i];
-        ssids += ", ";
+        if (i < config.netConf.numAPs-1) ssids += ", ";
       }
       ssids += "]";
       docSend["ssids"] = ssids;
@@ -674,7 +674,7 @@ void handleJSON() {
       String ssids = "[";
       for (size_t i = 0; i < config.netConf.numAPs; i++) {
         ssids += config.netConf.SSIDs[i];
-        ssids += ", ";
+        if (i < config.netConf.numAPs-1) ssids += ", ";
       }
       ssids += "]";
       docSend["ssids"] = ssids;
@@ -779,6 +779,12 @@ void handleJSON() {
       docSend["msg"] = response;
       docSend["state"] = "busy";
     }
+  }
+  /*********************** UNKNOWN COMMAND ****************************/
+  else {
+    response = "unknown command";
+    docSend["msg"] = response;
+    logger.log(WARNING, "Received unknown command");
   }
 }
 

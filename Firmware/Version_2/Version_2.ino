@@ -780,7 +780,7 @@ void onMQTTConnect() {
   mqttSubscribe();
   // Should also publish current state
   if (mqtt.connected()) {
-    mqtt.publish(mqttTopicPubSwitch, (bool)relay.state ? TRUE_STRING : FALSE_STRING);
+    mqtt.publish(mqttTopicPubSwitch, (bool)relay.state ? TRUE_STRING : FALSE_STRING, true);
   }
 }
 
@@ -1621,7 +1621,7 @@ void relayCB(bool value) {
     config.setRelayState(value); 
   }
   if (mqtt.connected()) {
-    mqtt.publish(mqttTopicPubSwitch, value ? TRUE_STRING : FALSE_STRING);
+    mqtt.publish(mqttTopicPubSwitch, value ? TRUE_STRING : FALSE_STRING, true);
   }
   logger.log("Switched %s", value ? "on" : "off");
 }
