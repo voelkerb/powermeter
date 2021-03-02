@@ -38,7 +38,7 @@ There are plenty of use cases for a smart plug inside a smart home.
     * Switch appliances _on_ and _off_ by time of day.
     * Switch appliances _off_ automatically at standby consumption.
     * Trigger an alert if the consumption exceeds a limit.
-<img src="/docu/figures/officeSpeaker.png", width="200px">
+<img src="/docu/figures/officeSpeaker.png" width="200px">
 * Monitor the power consumption of an appliance over day. See this faulty fridge as an example.
 <img src="/docu/figures/fridge.png">
 * Analyze high frequency voltage and current waveforms.
