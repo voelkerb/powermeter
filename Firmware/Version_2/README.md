@@ -2,6 +2,10 @@
 
 # [Firmware Version 2]
 
+## Supported Hardware
+This firmware version supports Hardware Revision 2.
+
+## Interfacing with a Powermeter
 The [powermeter] has to be connected to an outlet for power supply. \
 At first boot, the [powermeter] will open a WiFi-Network called "powermeterX".\
 It is not password protected, so you can simply connect to it. 
@@ -104,6 +108,10 @@ Info:[I]03/02 11:38:42: Subscribing to: powermeter/+
 Info:[I]03/02 11:38:42: Subscribing to: powermeter/powermeterX/+
 Info:{"error":false,"msg":"Set MQTTServer address to: 192.168.0.13","mqtt_server":"192.168.0.13"}
 ```
+
+NOTE: In sampling mode, MQTT is disabled for performance reason.
+
+
 ### Receiving MQTT messages
 The relay state is send as a retained message on topic ```powermeter/<name>/state/switch```
 ```bash
@@ -146,85 +154,92 @@ Mqtt can also be used to send any command. Special topics are used to switch the
   ```
 
 ## Getting Data
-Finally, to get some high frequency data beyond whats possible using [#mqtt] out of the powermeters, you have multiple possibilities. 
+Finally, to get some high frequency data out of the powermeters beyond whats possible using [mqtt](#mqtt), you have multiple possibilities. 
 
 ### Using a stream server
-Use the command 
-After setting a stream server address for each powermeter, 
-** Set the Stream Server. The device will automatically connect to this TCP server on port ```54322```
-** command: _{"cmd":"streamServer", "payload":{"server":"<ServerAddress>"}}_
-* *MQTT*:
-** Set address of an mqtt broker. Device will connect and regularly send relay and sampling state changes as well as power drawn if not in sampling mode
-** command: _{"cmd":"timeServer", "payload":{"server":"<ServerAddress>"}}_
-* *Sampling*:
-** Start sampling:
-*** command: _{"cmd":"sample", "payload":{"type":"<type>", "measures":"<measures>", "rate":<rate>, "prefix":<prefix>, "port":<port>,"time":<time>,"flowCtr":<flowCtr>,"slot":[<slot>,<slots>],"ntpConf":<ntpConf>}}_
-*** format: The raw data returned will be encoded as 32 Bit MSB first float values.
-*** Some of the values are optional like rate, prefix, port, measures, time, flowCtr, slot, ntpConf
-*** <type> + optional: <port>:
-**** "Serial": sampled data is sent over USB Serial connection
-**** "TCP": sampled data is sent over TCP connection (the one you opened to it). 
-**** "UDP": sampled data is sent over a UDP connection. You need to specify the UDP Port with <port>.
-**** "MQTT": sampled data is sent over MQTT (broker must be set). 
-**** "FFMPEG": sampled data is sent over TCP at port 54322. No prefix is supported and no line ending. Just the raw data. Can be used directly with ffmpeg streaming.
-*** <rate>: 
-**** Integer value between 1 and 32000. It however has to be an integer divider of 32000 otherwise it will not work (e.g. 16k, 8k, 4k, 2k, 1k, etc. )
-**** default: 8000
-**** Note: TODO: currently, only max 8000 is working due to high cpu pressure
-*** <measures> (optional):
-**** "v,i_L1" or "v,i": will return v: voltage and i: current of L1.
-**** "v,i_L2" or "v,i": will return v: voltage and i: current of L2.
-**** "v,i_L3" or "v,i": will return v: voltage and i: current of L3.
-**** "p,q": will return p: active and q: reactive power of all channels ordered p_L1,p_L2,p_L3,q_L1,q_L2,q_L3.
-***** Note: max samplingrate is 50 Hz
-**** "v,i_RMS": will return v: voltage and i: current RMS values in order v,v,v,i,i,i.
-***** Note: max samplingrate is 50 Hz
-**** default =  "v,i,v,i,v,i"
-*** <prefix> (optional):
-**** "true" or "false": if true, each chunk of measurement will be sent with the prefix "Data:"<chunk_length><packet_num>
-**** <chunk_length>: 2 bytes length of chunk, format: _<H_
-**** <packet_num>: running packet number as 4 bytes integer, format: _<I_
-**** Default: true
-*** <ntpConf> (optional):
-**** integer: interpreted as milliseconds. The ntp request before starting the streaming needs to be confident within this threshold value. 
-**** Note: NTP requests are send over UDP to an NTP server. The time it takes to get the answer needs to be considered as well for millisecond resolution. As the request has to sent to the server and transported back, the half time of the request is added to the received time. The request is thus only confident to this timespan. In the worst case - if a response took 10ms - it could be 0ms for sending to the server and 10ms for getting the response. This would mean, the time is off the actual time about 5ms - which is our confidence level. As most sampling is stored relative (start time + sampling rate), getting the start time as exact as possible is crucial. 
-**** Default: no NTP request is sent
-*** <flowCtr> (optional):
-**** "true" or "false": if true, sink must request x amount of samples with cts cmd. See below for more detail 
-**** Default: false
-*** <time> (optional):
-**** unix timestamp at which sampling should be started. The timestamp must be in the future more than 500ms but is not allowed to be further in time as 20seconds. 
-**** Note: This can be used to start sampling with multiple devices at an exact point in time which is the same for all devices.** [<slot>,<slots>] (optional):
-**** <slot> integer, slot number data is sent
-**** <slots> integer, total number of slots
-**** The idea is that only one device sends data at the same time in a network with multiple device _d_i_. Each device will only send data if the following condition is true: now.seconds%slots == slot
-**** Example: 3 device d_i with configs: d_0 = [0,3], d_1 = [0,1], d_2 = [2,3]. All devices send data each 3 seconds. e.g. d_0 at second 0, 3, 6, ... 
-**** Note: This only works, if all data sampled can be send out in this second. If you e.g. have 10 device, one device has to send 10s of data every 10s within 1s. The idea behind is that wifi/tcp send collisions are avoided.
-**** Default: false
-** Stop sampling/streaming etc: 
-*** command: _{"cmd":"stop"}_
-** Request a given amount of samples: 
-*** command: _{"cmd":"reqSamples","samples":<numSamples>}_
-*** _<numSamples>_: long, must be between 10 and 2000
-*** Note: The device must be sampling and during sampling flow control must have been set!
-** Flow control during sampling: 
-*** command: _{"cmd":"cts","value":<value>}_
-*** <value> can be true or false. True to let device stream data, false to stop.
-*** Note: does not have to be paired with flowControl sampling
-* *Misc*:
-** Test if device is still alive:
-*** command: _?_
-*** Note: will return "Info: Setup done" and will stop sampling! (Just for backward compatibility)
-** Keepalive:
-*** command: _!_
-*** Note: is simply ignored but can be sent at any time
+At your future data sink (which simply might be you computer), host a TCP server at port ```54322```.
+Find you IP address and set it as the target stream server for each powermeter using the command ```{"cmd":"streamServer", "payload":{"server":"<YourIp>"}}```.
+The [powermeter] will check if the stream server is available each 30s and automatically connects to it.
+For the data format, see [Data Format](#data-format).\
 
+### Using a sampling command
+This is the most complicated command of the powermeter. It has multiple and potentially optional parameter which will be explained in the following. 
+```bash
+{"cmd":"sample", "payload":{"type":"<type>", "measures":"<measures>", "rate":<rate>, "prefix":<prefix>, "port":<port>,"time":<time>,"flowCtr":<flowCtr>,"slot":[<slot>,<slots>],"ntpConf":<ntpConf>}}
+```
+Parameters:
+* ```<type>``` + optional: ```<port>```: The Type of the data stream.
+  * "Serial": sampled data is sent over USB Serial connection
+  * "TCP": sampled data is sent over TCP connection (the one you opened to it). 
+  * "UDP": sampled data is sent over a UDP connection. You need to specify the UDP Port with ```<port>```.
+  * "MQTT": sampled data is sent over MQTT (broker must be set, see [MQTT](#mqtt)). 
+  * "FFMPEG": sampled data is sent over TCP at port 54322. No prefix is supported and no line ending. Just the raw data. Can be used directly with ffmpeg streaming.
 
-Each command sent to the [powermeter] is answered by a JSON encoded message. 
-The Get the IP address of the device either by looking at it's boot up message or by looking in the DHCP list of your router. It is always a good idea to assign a fixed IP to the device.
-From Version 0.9 on, mDNS support allows to fresolve the device's IP address using the mDNS name. See boot up message of device for the name or explore the network with a corresponding app e.g. bonjour browser. 
-Commands can be either send over USB or over a TCP socket connection. Therefore connect to the socket <IP address> or <mDNS Name>.local on port 54321.
-An additional raw stream can be retrieved using port 54322. 
+* ```<rate>```: The goal sampling rate of the data.
+  * Integer value between 1 and 8000 (default: 4000)
+
+* ```<measures>``` (optional):
+  * "v,i": will return _voltage_ and _current_
+  * "p,q": will return _active_ and _reactive power_
+  * "v,i_RMS": will return _RMS voltage_ and _RMS current_
+  * "v,i,p,q": will return _voltage_, _current_, _active_, and _reactive power_
+  * default: "v,i"
+
+* ```<prefix>``` (optional):
+  * "true" or "false": if true, each chunk of measurement will be sent with the prefix ```"Data:"<chunk_length><packet_num>```
+  * ```<chunk_length>```: 2 bytes length of chunk, format: _```<H```_
+  * ```<packet_num>```: running packet number as 4 bytes integer, format: _```<I```_
+  * default: "true"
+
+* ```<ntpConf>``` (optional):
+  * integer: interpreted as milliseconds. The NTP request before starting the streaming needs to be confident within this threshold value. 
+  * NOTE: NTP requests are send over UDP to an NTP server. The time it takes to get the answer needs to be considered as well for millisecond resolution. As the request has to sent to the server and transported back, the half time of the request is added to the received time. The request is thus only confident to this timespan. In the worst case - if a response took 10ms - it could be 0ms for sending to the server and 10ms for getting the response. This would mean, the time is off the actual time about 5ms - which is our confidence level. As most sampling is stored relative (start time + sampling rate), getting the start time as exact as possible is crucial. 
+  * Default: no NTP request is sent
+
+* ```<flowCtr>``` (optional):
+  * "true" or "false": if true, sink must request _x_ amount of samples with ```reqSamples``` command or enable sending with a [cts](#pause-streaming) command.
+  * Default: false
+  * Request ```<numSamples>``` using the command: ```{"cmd":"reqSamples","samples":<numSamples>}```
+    * ```<numSamples>```: long, must be between 10 and 2000
+    * NOTE: The device must be sampling and during sampling flow control must have been set to true!
+
+* ```<time>``` (optional):
+  * unix timestamp at which sampling should be started. The timestamp must be in the future more than 500ms but is not allowed to be further in time as 20seconds. 
+  * NOTE: This can be used to start sampling with multiple devices at an exact point in time which is the same for all devices.
+  * Default: Sampling is started immediately 
+
+* ```[<slot>,<slots>]``` (optional):
+  * ```<slot>``` integer, slot number data is sent
+  * ```<slots>``` integer, total number of slots
+  * The idea is that only one device sends data at the same time in a network with multiple device ```d_i```. Each device will only send data if the following condition is true: ```now.seconds%slots == slot```
+  * Example: 3 devices ```d_i``` with configs: ```d_0 = [0,3]```, ```d_1 = [0,1]```, ```d_2 = [2,3]```. All devices send data each 3 seconds. e.g. ```d_0``` at second ```0, 3, 6,``` ... 
+  * NOTE: This only works, if all data sampled can be send out in this second. If you e.g. have 10 devices, one device has to send 10s of data every 10s within 1s. Therewith, wifi/tcp collisions are avoided.
+  * Default: false
+
+### Pause streaming
+You can use flow control during sampling with the command: ```{"cmd":"cts","value":<value>}```
+* ```<value>``` can be _true_ or _false_. _True_ to let device stream data, false to pause.
+* NOTE: does not necessarily have to be paired with sampling in which ```flowCtr``` was set to _true_.
+
+### Stop streaming 
+```{"cmd":"stop"}```\
+Send this command to stop sampling or streaming.
+
+## Misc
+### Availability
+You can send ```?``` without a JSON encoding to test if the device is still reachable. It will return "Info: Setup done" and will stop sampling! (Just for backward compatibility)
+
+### Keepalive
+As a keepalive cmd, you can send ```!```. This simply gets ignored but might prevent the TCP connection from being closed if nothing is sent.
+
+## Data Format
+The data is returned encoded as 32 Bit MSB first float values.
+If not explicitly disabled using ```"prefix":"false"```, data is preceded by a prefix.\
+```"Data:"<chunk_length><packet_num><data>```
+  * ```<chunk_length>```: 2 bytes describing the length of this data chunk, format: _```<H```_
+  * ```<packet_num>```: running packet number as 4 bytes integer, format: _```<I```_
+If disable or the stream type is set to FFMPEG, just the ```<data>``` is returned.
+
 
 
 
@@ -295,85 +310,3 @@ An additional raw stream can be retrieved using port 54322.
   Press enter and watch the magic
 
 
-
-
-## Supported Hardware
-This firmware version supports Hardware Revision 2.
-
-
-Requirements:
-- [RTC](https://github.com/voelkerb/ESP.DS3231_RTC/)
-- [multiLogger](http://github.com/voelkerb/ESP.multiLogger) (-> see ```advanced.ino```)
-
-```C++
-#include "timeHandling.h"
-
-// CB for successful ntp syncs
-void ntpSynced(unsigned int confidence);
-
-TimeHandler myTime(config.timeServer, LOCATION_TIME_OFFSET, NULL, &ntpSynced);
-
-Timestamp then;
-
-void setup() {
-  Serial.begin(9600);
-  // Connect to WiFi
-  ...
-  // Initial NTP update after connecting to WiFi
-  myTime.updateNTPTime();
-  then = myTime.timestamp();
-}
-
-void loop() {
-  Timestamp now = myTime.timestamp();
-  if ((now.seconds-then.seconds) >= 10) {
-    Serial.println("Another 10s passed");
-    Serial.print("Current time: ");
-    Serial.print(myTime.timeStr());
-    then = now;
-  }
-  ...
-}
-
-/****************************************************
- * Callback when NTP syncs happened and
- * it's estimated confidence in ms
- ****************************************************/
-void ntpSynced(unsigned int confidence) {
-  Serial.print("NTP synced with conf: ");
-  Serial.println(confidence);
-}
-
-```
-
-
-
-This class can also be used with the an RTC.
-The current time will then be gathered from the rtc object. After each successfull NTP request, the RTC time is updated. 
-
-```C++
-#include "timeHandling.h"
-#include "rtc.h"
-...
-Rtc rtc(RTC_INT, SDA_PIN, SCL_PIN);
-TimeHandler myTime(config.timeServer, LOCATION_TIME_OFFSET, &rtc, &ntpSynced);
-...
-
-```
-
-You can also use it to get log time strings for a [multiLogger](https://github.com/voelkerb/ESP.multiLogger/) instance. See advanced example:
- ```advanced.ino```.
-
-```bash
- - [I]02/06 08:28:16: Connecting to WiFi..
- - [I]02/06 08:28:16: Connected to the WiFi network: ******** with IP: *********
- - [D]02/06 08:28:16: Sending NTP packet...
- - [I]02/25 12:34:04: NTP Time: 02/25/2021 12:34:04.597, td 17
- - [D]02/25 12:34:04: Success NTP Time
- - [D]02/25 12:34:04: NTP synced with conf: 17
- - [I]02/25 12:34:04: Current time: 02/25/2021 12:34:04.728
- - [I]02/25 12:34:14: Another 10s passed
- - [I]02/25 12:34:14: Current time: 02/25/2021 12:34:14.000
- - [I]02/25 12:34:24: Another 10s passed
- - [I]02/25 12:34:24: Current time: 02/25/2021 12:34:24.000
-```
