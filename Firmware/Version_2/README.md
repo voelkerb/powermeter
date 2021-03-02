@@ -1,6 +1,6 @@
 [powermeter]: (https://github.com/voelkerb/powermeter)
 
-# Firmware Version 2
+# [Firmware Version 2]
 
 The [powermeter] has to be connected to an outlet for power supply. \
 At first boot, the [powermeter] will open a WiFi-Network called "powermeterX".\
@@ -145,10 +145,12 @@ Mqtt can also be used to send any command. Special topics are used to switch the
   ...
   ```
 
-
 ## Getting Data
-Finally, to get some data you have multiple possibilities. 
+Finally, to get some high frequency data beyond whats possible using [#mqtt] out of the powermeters, you have multiple possibilities. 
 
+### Using a stream server
+Use the command 
+After setting a stream server address for each powermeter, 
 ** Set the Stream Server. The device will automatically connect to this TCP server on port ```54322```
 ** command: _{"cmd":"streamServer", "payload":{"server":"<ServerAddress>"}}_
 * *MQTT*:
