@@ -7,3 +7,5 @@
 # Eagle temporary board and schematic file
 **/*.b#*
 **/*.s#*
+
+**/*.zip

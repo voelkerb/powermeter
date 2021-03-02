@@ -14,11 +14,11 @@ As the PCB is designed in Eagle, a 3D part can also be imported directly in Fusi
 <img src="/docu/figures/Version2_PCB_Fusion.png" width="400">
 
 
-For a simple stl, we refer to [powermeterV2.stl](powermeterV2.stl)).
+For a simple stl file which you can also 3D print to see if your casing matches, we refer to [powermeterV2.stl](powermeterV2.stl)).
 
 <img src="/docu/figures/Version2_PCB_STL.png" width="400">
 
 # Casing for a cable
-Sometimes the [bopla] case cannot be used as it is a little to bulky. Then you can embed the [powermeter] inside the cable using [case_in_cable_top.STL](case_in_cable_top.STL) and [case_in_cable_bottom.STL](case_in_cable_bottom.STL). Simply print them and place the PCB inside. 
+Sometimes the [bopla] case cannot be used as it is a little to bulky. Then you can embed the [powermeter] inside the cable using [case_in_cable_top.STL](case_in_cable_top.STL) and [case_in_cable.STL](case_in_cable.STL). Simply print them and place the PCB inside. 
 
 <img src="/docu/figures/InCableAssembly.png" width="400">
