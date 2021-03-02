@@ -1,3 +1,6 @@
+[powermeter]: (https://github.com/voelkerb/powermeter)
+
+# How to compile firmware version 1
 
 ## Compile from source using Arduino or PlatformIO
 
@@ -22,11 +25,11 @@
 * Select the [powermeter] you want to upload to from the avaialble network ports
 * If the corresponding [powermeter] is not shown, make sure you are in the same network or try to reset the [powermeter] (unplug it from the socket and plug it back in).
 
-    <img src="/docu/figures/NetworkPort.png" width="500">
+    <img src="/docu/figures/NetworkPort.png" width="400">
 
 * Upload using password "energy"
 
-    <img src="/docu/figures/Password.png" width="500">
+    <img src="/docu/figures/Password.png" width="200">
 
 ## Upload using custom Uploader
 

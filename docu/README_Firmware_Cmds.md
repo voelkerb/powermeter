@@ -1,5 +1,8 @@
+[powermeter]: (https://github.com/voelkerb/powermeter)
 
-## Interfacing with a Powermeter
+# How to interface with a Powermeter
+
+## The Basics
 The [powermeter] has to be connected to an outlet for power supply. \
 At first boot, the [powermeter] will open a WiFi-Network called "powermeterX".\
 It is not password protected, so you can simply connect to it. 
