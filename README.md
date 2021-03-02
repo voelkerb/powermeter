@@ -45,9 +45,6 @@ There are plenty of use cases for a smart plug inside a smart home.
 <img src="/docu/figures/fridgeUI.png">
 
 
-* 
-
-
 # License:
 ## Firmware:
 Copyright (c) 2019 Benjamin Völker. All rights reserved.
