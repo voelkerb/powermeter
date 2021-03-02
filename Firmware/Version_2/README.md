@@ -36,7 +36,38 @@
 
 ## Upload using custom Uploader
 
-* Select 
+* Compile the firmware
+* Copy the path of the compiled binary _elf_ or _bin_ (the _bin_ will be used either way)
+
+    <img src="/docu/figures/CopyBin.png" width="500">
+
+* Use the upload script
+  ```bash
+  python3 upload.py powermeter <pathToElfOrBin> 
+  ```
+  Select one or mulitple [powermeter] from the provided list
+  ```
+  Available Devices:
+  #  powermeter:              Device:                  IP:                      
+  0  powermeter0              powermeter0              192.168.0.145            
+  1  powermeter15             powermeter15             192.168.0.113            
+  2  powermeter20             powermeter20             192.168.0.111            
+  3  powermeter21             powermeter21             192.168.0.118            
+  4  powermeter24             powermeter24             192.168.0.115            
+  5  powermeter26             powermeter26             192.168.0.119            
+  6  powermeter27             powermeter27             192.168.0.138            
+  7  powermeter28             powermeter28             192.168.0.114            
+  Press ENTER to continue with all devices.
+  Deselect specific devices e.g.: -2,-4,-7
+  Select specific devices e.g.: 1,3,5,6
+  Search again a/A
+  Press r/R to reset
+  e/E to cancel Or press CTR-C to exit program
+  ```
+  Press enter and watch the magic appear
+
+  <img src="/docu/figures/upload.gif">
+
 
  Upload the new firmware.
 Connect to the device via a USB Serial or TCP connection to a PC. Look for the "COM" port (Windows) or "/dev/ttyXXX" port (Unix) and set the correct baudrate which depends on the current setting in the Firmware (default: 2000000).
