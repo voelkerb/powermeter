@@ -11,7 +11,7 @@ Depending on your requirements, you might either build [Version 1.0](/Schematic/
 * [Version 1.0](/Schematic/Version_1) features an ESP8266 microcontroller and a 10A solid state relay.
     * Benefits: 
         * The parts are cheaper (parts around 30€).
-        * It comes with a USB interface for upload the firmware or streaming data
+        * It comes with a USB interface for uploading the firmware or streaming data
     * Drawbacks: 
         * The 10A relay can only toggle connected appliances with a maximum power consumption of 2300 Watt.
 * [Version 2.0](/Schematic/Version_2) features an ESP32 microcontroller and a 16A bistable relay.
@@ -23,13 +23,17 @@ Depending on your requirements, you might either build [Version 1.0](/Schematic/
     * Drawbacks:
         * A little bit more expensive (parts around 35€).
 
+Steps to build your own PowerMeter:
 1. Make the PCB ([Version 1.0](/Schematic/Version_1) or [Version 2.0](/Schematic/Version_2)). I recommend to use [JLC](https://jlcpcb.com) as it is super cheap and the quality is still decent.
 2. Buy the parts listed under [BOM](/BOM).
 3. Solder everything together. We used a small reflow oven, but it could also be done using a fine soldering iron. 
-4. Buy a matchin housing. We highly recommend to use [this one](https://www.conrad.de/de/p/bopla-eletec-se-432-de-cee-stecker-gehaeuse-120-x-65-x-50-abs-polycarbonat-lichtgrau-graphitgrau-1-st-522228.html) as the PCB was specially designed for it, the mounting holes match, and it is safe to use with 230V. We also experimented with custom 3D prints (see [CAD](/CAD)) but its at your own risk to do so. 
-5. Wire the plug using the following diagram. 
+4. Buy a matching housing. We highly recommend to use [this one](https://www.conrad.de/de/p/bopla-eletec-se-432-de-cee-stecker-gehaeuse-120-x-65-x-50-abs-polycarbonat-lichtgrau-graphitgrau-1-st-522228.html) as the PCB was specially designed for it, the mounting holes match, and it is safe to use with 230V. We also experimented with custom 3D prints (see [CAD](/CAD)) but it's at your own risk to do so. 
+5. Wire the PowerMeters using the following diagram. 
+
 <img src="/docu/figures/socket.png">
-6. Upload the [firmware](/Firmware/) according to the instructions for you version. 
+
+6. Upload the [firmware](/Firmware) according to the instructions for your version. 
+7. Interface with the PowerMeter accordingly as stated [here](/docu/README_Firmware_Cmds.md) 
 
 # Use Cases
 There are plenty of use cases for a smart plug inside a smart home.
