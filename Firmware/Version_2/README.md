@@ -1,6 +1,6 @@
 [powermeter]: (https://github.com/voelkerb/powermeter)
 
-# [Firmware Version 2]
+# Firmware Version 2
 
 ## Supported Hardware
 This firmware version supports Hardware Revision 2.
@@ -15,9 +15,9 @@ This will show you basic information of the [powermeter] as a JSON encoded messa
 Info:{"cmd":"info","type":"powermeter","version":"2.2","compiled":"Mar_2_2021_09:57:58","sys_time":"03/02/2021 10:37:07.662","name":"powermeterX","ip":"192.168.4.1","mqtt_server":"-","stream_server":"-","time_server":"time.google.com","sampling_rate":4000,"buffer_size":3670016,"psram":true,"rtc":false,"calV":1,"calI":1,"state":"idle","relay":1,"calibration":[1,1],"ssids":"[energywifi]","ssid":"-","rssi":-71,"bssid":"-"}
 ```
 You will further notice that a lifeness log messages is sent each second.
+We will further see how to use commands to interface with a powermeter.
 
-**Each commands sent to the [powermeter] over USB or a TCP channel requires JSON encoding and is answered by a JSON encoded answer message preceded by a the text "Info:".**
-We will further see how to use each command.
+**Each command sent to the [powermeter] over USB or a TCP channel requires JSON encoding and is answered by a JSON encoded answer message preceded by a the text "Info:". If an error occurred while processing the commmand, the error key is set true in the returned JSON.**
 
 ## Info
 ```{"cmd":"info"}```\
@@ -131,19 +131,19 @@ Mqtt can also be used to send any command. Special topics are used to switch the
   ```bash
   mosquitto_pub -h 192.168.0.13 -t 'powermeter/powermeter27/switch' -m true
   ```
-* Sample a single value using topic ```powermeter/<name>/sample``` and message one of ```v,i,p,q,s```. On no message, the active power is sent.
+* Sample a single value using topic ```powermeter/<name>/sample``` and message one of ```v,i,p,q,s``` (_RMS voltage_,_RMS Current_, _active_, _reactive_, or _apparent power_ ). On no, or any other message, the _active power_ is sent.
   ```bash
   powermeter/powermeter27/sample p
   ````
-  Response:
+  The response contains a JSON dictionary with the key _value_, _unit_ and _ts_, example:
   ```bash
   powermeter/powermeter27/state/sample {"value":1.003773,"unit":"W","ts":"03/02/2021 11:59:59.034"}
   ```
-* Send any command using topic ```powermeter/<name>/cmd```
+* You can also send any command, which can be sent over a bare TCP connection using topic ```powermeter/<name>/cmd```
   ```bash
   mosquitto_pub -h 192.168.0.13 -t 'powermeter/powermeter27/cmd' -m '{"cmd":"switch","payload":{"value":"false"}}'
   ````
-* If you have multiple powermeters and want to send the message to all at the same time, you can simple ditch the specific powermeter name and all will answer. 
+* If you have multiple powermeters and want to send the message to all at the same time (e.g. to change some global settings such as the MQTT broker), you can simple ditch the specific powermeter name and all will answer. 
   ```bash
   powermeter/sample p
   powermeter/powermeter24/state/sample {"value":1.487539,"unit":"W","ts":"03/02/2021 12:08:28.208"}
@@ -156,24 +156,38 @@ Mqtt can also be used to send any command. Special topics are used to switch the
 ## Getting Data
 Finally, to get some high frequency data out of the powermeters beyond whats possible using [mqtt](#mqtt), you have multiple possibilities. 
 
+### Using FFmpeg
+Using ffmpeg is by far the most simple way to store high frequency data. Thus, the sampling rate remains at 4kHz and only current and voltage measurements are streamed.
+On your host computer, simply install [ffmpeg](https://ffmpeg.org) and run the following:
+```bash
+ffmpeg -nostdin -hide_banner -fflags +nobuffer+flush_packets -f f32le -ar 4000.0 -guess_layout_max 0 -ac 2.0 -flush_packets 1 -thread_queue_size 512 -analyzeduration 0 -i tcp://<powermeterIP>:54322 -c:a wavpack -frame_size 4000 -metadata:s:a:0 CHANNELS=2 -metadata:s:a:0 CHANNEL_TAGS="v,i" -metadata:s:a:0 title="<powermeterName>" -map 0 -y output.mkv 
+```
+You can directly use the MDNS name for ```<powermeterIP>```. Some of the settings in call such as the metadata are of course optional. 
+
 ### Using a stream server
-At your future data sink (which simply might be you computer), host a TCP server at port ```54322```.
+At your future data sink (which simply might be your computer), host a TCP server at port ```54322```.
 Find you IP address and set it as the target stream server for each powermeter using the command ```{"cmd":"streamServer", "payload":{"server":"<YourIp>"}}```.
 The [powermeter] will check if the stream server is available each 30s and automatically connects to it.
-For the data format, see [Data Format](#data-format).\
+For the data format, see [Data Format](#data-format).
 
 ### Using a sampling command
 This is the most complicated command of the powermeter. It has multiple and potentially optional parameter which will be explained in the following. 
 ```bash
 {"cmd":"sample", "payload":{"type":"<type>", "measures":"<measures>", "rate":<rate>, "prefix":<prefix>, "port":<port>,"time":<time>,"flowCtr":<flowCtr>,"slot":[<slot>,<slots>],"ntpConf":<ntpConf>}}
 ```
+Example:
+The response for the command ```{"cmd":"stop","payload":{"type":"TCP","rate":1}}``` is:
+```bash
+Info:{"error":false,"measures":"v,i","chunksize":8,"samplingrate":1,"conn_type":"TCP","measurements":2,"prefix":true,"flowCtr":false,"cmd":"sample","unit":"V,mA","startTs":"1614697441.119"}
+```
+
 Parameters:
 * ```<type>``` + optional: ```<port>```: The Type of the data stream.
   * "Serial": sampled data is sent over USB Serial connection
   * "TCP": sampled data is sent over TCP connection (the one you opened to it). 
   * "UDP": sampled data is sent over a UDP connection. You need to specify the UDP Port with ```<port>```.
   * "MQTT": sampled data is sent over MQTT (broker must be set, see [MQTT](#mqtt)). 
-  * "FFMPEG": sampled data is sent over TCP at port 54322. No prefix is supported and no line ending. Just the raw data. Can be used directly with ffmpeg streaming.
+  * "FFMPEG": connect with an ffmpeg call to the stream server on port ```54322```. No prefix is supported and no line ending, just the raw data. Can be used directly with ffmpeg streaming. Allows to change settings while using [ffmpeg streaming](#using-ffmpeg).
 
 * ```<rate>```: The goal sampling rate of the data.
   * Integer value between 1 and 8000 (default: 4000)
@@ -183,54 +197,57 @@ Parameters:
   * "p,q": will return _active_ and _reactive power_
   * "v,i_RMS": will return _RMS voltage_ and _RMS current_
   * "v,i,p,q": will return _voltage_, _current_, _active_, and _reactive power_
-  * default: "v,i"
+  * Default: "v,i"
 
 * ```<prefix>``` (optional):
-  * "true" or "false": if true, each chunk of measurement will be sent with the prefix ```"Data:"<chunk_length><packet_num>```
-  * ```<chunk_length>```: 2 bytes length of chunk, format: _```<H```_
+  * "true" or "false": if _true_, each chunk of measurement will be sent with the prefix ```"Data:"<chunk_length><packet_num><data>```
+  * ```<chunk_length>```: 2 bytes stating the length the amount of bytes in ```<data>```, format: _```<H```_
   * ```<packet_num>```: running packet number as 4 bytes integer, format: _```<I```_
-  * default: "true"
+  * Default: _true_
 
 * ```<ntpConf>``` (optional):
-  * integer: interpreted as milliseconds. The NTP request before starting the streaming needs to be confident within this threshold value. 
-  * NOTE: NTP requests are send over UDP to an NTP server. The time it takes to get the answer needs to be considered as well for millisecond resolution. As the request has to sent to the server and transported back, the half time of the request is added to the received time. The request is thus only confident to this timespan. In the worst case - if a response took 10ms - it could be 0ms for sending to the server and 10ms for getting the response. This would mean, the time is off the actual time about 5ms - which is our confidence level. As most sampling is stored relative (start time + sampling rate), getting the start time as exact as possible is crucial. 
+  * Integer, interpreted as milliseconds. The NTP request before starting the sampling needs to be confident within this threshold value. 
+  * NOTE: NTP requests are send over UDP to the specified NTP server. The time it takes to get the answer needs to be considered as well for millisecond resolution. As the request has to be sent to the server and from the server back to the [powermeter], half of the time the request took is added to the received NTP time. The request is thus only confident up to the time it took to receive the response, as in the worst case - if a response took 10ms - it could be 0ms for sending to the server and 10ms for getting the response. This would mean, the time is off the actual time about 5ms - which is our confidence level. As most sampling is stored relative (start time + sampling rate), getting the start time as exact as possible is crucial. 
   * Default: no NTP request is sent
 
 * ```<flowCtr>``` (optional):
-  * "true" or "false": if true, sink must request _x_ amount of samples with ```reqSamples``` command or enable sending with a [cts](#pause-streaming) command.
-  * Default: false
+  * "true" or "false": if _true_, the sink has to request _x_ amount of samples with the ```reqSamples``` command or actively enable sending with a [cts](#pause-streaming) command.
+  * Default: _false_
   * Request ```<numSamples>``` using the command: ```{"cmd":"reqSamples","samples":<numSamples>}```
     * ```<numSamples>```: long, must be between 10 and 2000
-    * NOTE: The device must be sampling and during sampling flow control must have been set to true!
+    * NOTE: In order for the command to work, the [powermeter] must be sampling and during the sampling command ```flowCtr``` must have been set to _true_!
 
 * ```<time>``` (optional):
-  * unix timestamp at which sampling should be started. The timestamp must be in the future more than 500ms but is not allowed to be further in time as 20seconds. 
-  * NOTE: This can be used to start sampling with multiple devices at an exact point in time which is the same for all devices.
+  * Unix timestamp at which sampling should be started. The timestamp must be in the future more than 500ms but is not allowed to be further in time then 20s. 
+  * NOTE: This can be used to start sampling with multiple devices at an exact point in time. Sampling further starts at a positive voltage zero crossing. Therewith, powermeters at the same phase are synchronized within 1/f<sub>L</sub> with f<sub>L</sub> being the grid line frequency.  
   * Default: Sampling is started immediately 
 
 * ```[<slot>,<slots>]``` (optional):
-  * ```<slot>``` integer, slot number data is sent
-  * ```<slots>``` integer, total number of slots
+  * ```<slot>``` integer, the slot number in which data is sent
+  * ```<slots>``` integer, the total number of slots
   * The idea is that only one device sends data at the same time in a network with multiple device ```d_i```. Each device will only send data if the following condition is true: ```now.seconds%slots == slot```
-  * Example: 3 devices ```d_i``` with configs: ```d_0 = [0,3]```, ```d_1 = [0,1]```, ```d_2 = [2,3]```. All devices send data each 3 seconds. e.g. ```d_0``` at second ```0, 3, 6,``` ... 
-  * NOTE: This only works, if all data sampled can be send out in this second. If you e.g. have 10 devices, one device has to send 10s of data every 10s within 1s. Therewith, wifi/tcp collisions are avoided.
-  * Default: false
+  * Example: 3 devices _d<sub>i</sub>_ with configs: _d<sub>0</sub> = [0,3]_, _d<sub>1</sub> = [1,3]_, _d<sub>2</sub> = [2,3]_. All devices send data each 3 seconds. e.g. _d<sub>0</sub>_ at second _0,3,6,..._ 
+  * NOTE: This only works, if all data sampled can be send out in this second. If you e.g. have 10 devices, one device has to send 10s of data every 10s within just 1s. If the powermeter is not able to sent all data within this second, buffer overflows will occur. However, it avoids wifi/tcp collisions caused by multiple powermeters.
+  * Default: _false_
 
 ### Pause streaming
 You can use flow control during sampling with the command: ```{"cmd":"cts","value":<value>}```
-* ```<value>``` can be _true_ or _false_. _True_ to let device stream data, false to pause.
+* ```<value>``` can be _true_ or _false_. _True_ to let device stream data, _false_ to pause.
 * NOTE: does not necessarily have to be paired with sampling in which ```flowCtr``` was set to _true_.
 
 ### Stop streaming 
 ```{"cmd":"stop"}```\
-Send this command to stop sampling or streaming.
+Send this command to stop sampling or streaming. As a response, you get information about the sampling process.
+```bash
+Info:{"msg":"Received stop command","sample_duration":16157,"samples":16,"sent_samples":16,"start_ts":"1614697441.119","stop_ts":"1614697457.276","ip":"192.168.0.138","avg_rate":0.955618,"cmd":"stop"}
+```
 
 ## Misc
 ### Availability
-You can send ```?``` without a JSON encoding to test if the device is still reachable. It will return "Info: Setup done" and will stop sampling! (Just for backward compatibility)
+You can send ```?``` without a JSON encoding to test if the device is still reachable. It will return ```Info: Setup done``` and will stop sampling! (Just for backward compatibility)
 
 ### Keepalive
-As a keepalive cmd, you can send ```!```. This simply gets ignored but might prevent the TCP connection from being closed if nothing is sent.
+As a keepalive command, you can send ```!```. This simply gets ignored but might prevent the TCP connection from being closed automatically if nothing is sent.
 
 ## Data Format
 The data is returned encoded as 32 Bit MSB first float values.
