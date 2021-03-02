@@ -2,20 +2,41 @@
 
 # Firmware Version 2
 
-## Upload using Arduino or PlatformIO
+## Compile from Source using Arduino or PlatformIO
 
 * In order to upload the firmware, you must install the latest version of the Arduino ESP32 environment. See [official instructions](https://github.com/espressif/arduino-esp32/blob/master/docs/arduino-ide/boards_manager.md):
   * Enter _https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json_ into _Arduino > Settings > Additional Board Manager URLs_ field.
   * Open Boards Manager from _Tools > Board_ menu and install _esp32 platform_
 * Select _ESP32 Dev kit_ with _PSRAM enabled_ from _Tools > Board_ 
+
+    <img src="/docu/figures/FirmwareSelectPort.png" width="500">
+    
 * Open the latest firmware "Version_X_X".
+* Press _Compile_
 
-1. Connect the [powermeter] using an FTDI: 
+## Upload using an FTDI
 
-    ![Firmware Select port](/docu/figures/FirmwareSelectPort.png)
-    <img src="/docu/figures/FirmwareSelectPort.png" width="148">
+* Connect the [powermeter] to an FTDI according to the following wiring: 
 
-2. Select the network port. 
+  <img src="/docu/figures/Connections.png" width="500">
+
+* Select no more than 2Mbauds
+* Press _Compile and Upload_
+
+## Upload using Arduino-OTA
+
+* Select the [powermeter] you want to upload to from the avaialble network ports
+* If the corresponding [powermeter] is not shown, make sure you are in the same network or try to reset the [powermeter] (unplug it from the socket and plug it back in).
+
+    <img src="/docu/figures/NetworkPort.png" width="500">
+
+* Upload using password "energy"
+
+    <img src="/docu/figures/Password.png" width="500">
+
+## Upload using custom Uploader
+
+* Select 
 
  Upload the new firmware.
 Connect to the device via a USB Serial or TCP connection to a PC. Look for the "COM" port (Windows) or "/dev/ttyXXX" port (Unix) and set the correct baudrate which depends on the current setting in the Firmware (default: 2000000).

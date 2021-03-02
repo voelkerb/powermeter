@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE eagle SYSTEM "eagle.dtd">
-<eagle version="9.5.0">
+<eagle version="9.6.2">
 <drawing>
 <settings>
 <setting alwaysvectorfont="no"/>
@@ -172,7 +172,7 @@
 <layer number="255" name="Accent" color="7" fill="1" visible="no" active="yes"/>
 </layers>
 <board>
-<fusionsync huburn="a.cGVyc29uYWw6dWUyYjQ4ODhi" projecturn="a.cGVyc29uYWw6dWUyYjQ4ODhiIzIwMTcwNTIxNzY5ODQ1MDE" f3durn="urn:adsk.wipprod:dm.lineage:pqhruwQzQBmYa2zzLySbzA" pcbguid="c2c8f41b-ba12-436c-b76a-1bc9196073d4" lastpulledtime="" lastsyncedchangeguid="78f39243-ae07-ae11-4f56-2a4d9db1e646"/>
+<fusionsync huburn="a.cGVyc29uYWw6dWUyYjQ4ODhi" projecturn="a.cGVyc29uYWw6dWUyYjQ4ODhiIzIwMTcwNTIxNzY5ODQ1MDE" f3durn="urn:adsk.wipprod:dm.lineage:pqhruwQzQBmYa2zzLySbzA" pcbguid="c2c8f41b-ba12-436c-b76a-1bc9196073d4" lastpulledtime="" lastsyncedchangeguid="78f39243-ae07-ae11-4f56-2a4d9db1e646" latestrevisionid="" lastsyncedrevisionid="" lastboardhashguid="" lastpushedtime="" linktopcb3d="false"/>
 <plain>
 <wire x1="0" y1="0" x2="61" y2="0" width="0" layer="20"/>
 <wire x1="61" y1="0" x2="61" y2="9.5" width="0" layer="20"/>
@@ -203,6 +203,8 @@
 <wire x1="23.7998" y1="3.4798" x2="23.7998" y2="15.8242" width="2.54" layer="30"/>
 <wire x1="23.7998" y1="15.8242" x2="20.3708" y2="19.2532" width="2.54" layer="30"/>
 <wire x1="20.3708" y1="19.2532" x2="20.3708" y2="19.685" width="2.54" layer="30"/>
+<text x="25.146" y="51.308" size="1.4224" layer="26" rot="MR0">Benjamin Voelker,
+University of Freiburg</text>
 </plain>
 <libraries>
 <library name="varistor" urn="urn:adsk.eagle:library:410">
@@ -5014,6 +5016,10 @@ design rules under a new name.</description>
 </board>
 </drawing>
 <compatibility>
+<note version="6.3" minversion="6.2.2" severity="warning">
+Since Version 6.2.2 text objects can contain more than one line,
+which will not be processed correctly with this version.
+</note>
 <note version="8.2" severity="warning">
 Since Version 8.2, EAGLE supports online libraries. The ids
 of those online libraries will not be understood (or retained)
