@@ -61,9 +61,6 @@ STPM stpm34(STPM_RES, STPM_CS, STPM_SYN);
 
 // counter holds # isr calls
 volatile uint16_t counter = 0;
-// Last micros() count of isr call
-volatile long nowTs = 0;
-volatile long lastTs = 0;
 
 RingBuffer ringBuffer(PS_BUF_SIZE, true);
 
@@ -153,11 +150,11 @@ volatile unsigned long packetNumber = 0;
 volatile unsigned long totalSamples = 0;
 
 // Some timer stuff s.t. things are updated regularly and not at full speed
-long lifenessUpdate = millis();
-long mdnsUpdate = millis();
-long tcpUpdate = millis();
-long rtcUpdate = millis();
-long mqttUpdate = millis();
+uint32_t lifenessUpdate = millis();
+uint32_t mdnsUpdate = millis();
+uint32_t tcpUpdate = millis();
+uint32_t rtcUpdate = millis();
+uint32_t mqttUpdate = millis();
 
 // HW Timer and mutex for sapmpling ISR
 hw_timer_t * timer = NULL;
@@ -168,8 +165,8 @@ SemaphoreHandle_t stpm_mutex;
 unsigned int coreFreq = 0;
 
 // test stuff
-long testMillis = 0;
-long testMillis2 = 0;
+uint32_t testMillis = 0;
+uint32_t testMillis2 = 0;
 uint16_t testSamples = 0;
 
 // Mutex for 1s RTC Interrupt
