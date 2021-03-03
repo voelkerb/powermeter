@@ -370,8 +370,10 @@ void onIdleOrSampling() {
   }
 
   // Handle tcp clients connections
-  if ((long)(millis() - tcpUpdate) >= 0) {
-    tcpUpdate += TCP_UPDATE_INTERVAL;
+  if (millis() - tcpUpdate > TCP_UPDATE_INTERVAL) {
+    tcpUpdate = millis();
+  // if ((long)(millis() - tcpUpdate) >= 0) {
+    // tcpUpdate += TCP_UPDATE_INTERVAL;
     // Handle disconnect
     for (size_t i = 0; i < MAX_CLIENTS; i++) {
       if (clientConnected[i]) {
@@ -408,38 +410,44 @@ void onIdle() {
 
   // Update stuff over mqtt
   if (mqtt.connected()) {
-    if ((long)(millis() - mqttUpdate) >= 0) {
-      mqttUpdate += MQTT_UPDATE_INTERVAL;
-      // On long time no update, avoid multiupdate
-      if ((long)(millis() - mqttUpdate) >= 0) mqttUpdate = millis() + MQTT_UPDATE_INTERVAL; 
+    if (millis() - mqttUpdate > MQTT_UPDATE_INTERVAL) {
+      tcpUpdate = millis();
+    // if ((long)(millis() - mqttUpdate) >= 0) {
+    //   mqttUpdate += MQTT_UPDATE_INTERVAL;
+    //   // On long time no update, avoid multiupdate
+    //   if ((long)(millis() - mqttUpdate) >= 0) mqttUpdate = millis() + MQTT_UPDATE_INTERVAL; 
       sendStatusMQTT();
     }
   }
 
   // Re-advertise MDNS service service every 30s 
   // TODO: no clue why, but does not work properly for esp32 (maybe it is the mac side)
-  if ((long)(millis() - mdnsUpdate) >= 0) {
-    mdnsUpdate += MDNS_UPDATE_INTERVAL;
-    // On long time no update, avoid multiupdate
-    if ((long)(millis() - mdnsUpdate) >= 0) mdnsUpdate = millis() + MDNS_UPDATE_INTERVAL; 
-      // initMDNS();
-      // Not required, only for esp8266
-    //MDNS.addService("_elec", "_tcp", STANDARD_TCP_STREAM_PORT);
-  }
+  // if ((long)(millis() - mdnsUpdate) >= 0) {
+  //   mdnsUpdate += MDNS_UPDATE_INTERVAL;
+  //   // On long time no update, avoid multiupdate
+  //   if ((long)(millis() - mdnsUpdate) >= 0) mdnsUpdate = millis() + MDNS_UPDATE_INTERVAL; 
+  //     // initMDNS();
+  //     // Not required, only for esp8266
+  //   //MDNS.addService("_elec", "_tcp", STANDARD_TCP_STREAM_PORT);
+  // }
   
   // update RTC regularly
-  if ((long)(millis() - rtcUpdate) >= 0) {
-    rtcUpdate += RTC_UPDATE_INTERVAL;
-    // On long time no update, avoid multiupdate
-    if ((long)(millis() - rtcUpdate) >= 0) rtcUpdate = millis() + RTC_UPDATE_INTERVAL; 
+  if (millis() - rtcUpdate > RTC_UPDATE_INTERVAL) {
+    rtcUpdate = millis();
+  // if ((long)(millis() - rtcUpdate) >= 0) {
+  //   rtcUpdate += RTC_UPDATE_INTERVAL;
+  //   // On long time no update, avoid multiupdate
+  //   if ((long)(millis() - rtcUpdate) >= 0) rtcUpdate = millis() + RTC_UPDATE_INTERVAL; 
     if (rtc.connected) rtc.update();
   }
     
   // Update lifeness only on idle every second
-  if ((long)(millis() - lifenessUpdate) >= 0) {
-    lifenessUpdate += LIFENESS_UPDATE_INTERVAL;
-    // On long time no update, avoid multiupdate
-    if ((long)(millis() - lifenessUpdate) >= 0) lifenessUpdate = millis() + LIFENESS_UPDATE_INTERVAL; 
+  if (millis() - lifenessUpdate > LIFENESS_UPDATE_INTERVAL) {
+    lifenessUpdate = millis();
+  // if ((long)(millis() - lifenessUpdate) >= 0) {
+  //   lifenessUpdate += LIFENESS_UPDATE_INTERVAL;
+  //   // On long time no update, avoid multiupdate
+  //   if ((long)(millis() - lifenessUpdate) >= 0) lifenessUpdate = millis() + LIFENESS_UPDATE_INTERVAL; 
     logger.log("");
   }
   
