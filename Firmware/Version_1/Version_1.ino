@@ -53,8 +53,10 @@ MultiLogger& logger = MultiLogger::getInstance();
 
 Configuration config;
 
-Rtc rtc(RTC_INT);
-TimeHandler myTime(config.timeServer, LOCATION_TIME_OFFSET, &rtc, &ntpSynced);
+// This version does not support an rtc
+// Rtc rtc(RTC_INT);
+DST germany{ true, 7, 3, 25, 7, 10, 25, 3600};
+TimeHandler myTime(config.timeServer, LOCATION_TIME_OFFSET, NULL, &ntpSynced, germany, &logger);
 
 // STPM Object
 STPM stpm34(STPM_RES, STPM_CS, STPM_SYN);
@@ -65,7 +67,7 @@ volatile uint16_t counter = 0;
 volatile long nowTs = 0;
 volatile long lastTs = 0;
 
-RingBuffer ringBuffer(BUF_SIZE);
+RingBuffer ringBuffer(PS_BUF_SIZE);
 
 #define SEND_BUF_SIZE MAX_SEND_SIZE+16
 static uint8_t sendbuffer[SEND_BUF_SIZE] = {0};
@@ -214,7 +216,8 @@ void setup() {
 
   // At first init the rtc module to get a time behavior
   bool successAll = true;
-  bool success = rtc.init();
+  bool success = successAll;
+  // bool success = rtc.init();
   // Init the logging modules
   logger.setTimeGetter(&timeStr);
   #ifdef USE_SERIAL
@@ -232,8 +235,6 @@ void setup() {
     StreamLogger * theStreamLog = new StreamLogger(NULL, &timeStr, &LOG_PREFIX[0], INFO);
     streamLog[i] = theStreamLog;
   }
-
-  if (!success) logger.log(ERROR, "Cannot init RTC");
   successAll &= success;
   
   relay.setCallback(relayCB);
@@ -285,7 +286,9 @@ void loop() {
   ArduinoOTA.handle();
   // We don't do anything else while updating
   if (updating) return;
-
+  
+  Network::update();
+  
   // Stuff done on idle
   if (state == SampleState::IDLE) {
     onIdle();
@@ -396,13 +399,13 @@ void onIdle() {
     //MDNS.addService("_elec", "_tcp", STANDARD_TCP_STREAM_PORT);
   }
   
-  // update RTC regularly
-  if ((long)(millis() - rtcUpdate) >= 0) {
-    rtcUpdate += RTC_UPDATE_INTERVAL;
-    // On long time no update, avoid multiupdate
-    if ((long)(millis() - rtcUpdate) >= 0) rtcUpdate = millis() + RTC_UPDATE_INTERVAL; 
-    if (rtc.connected) rtc.update();
-  }
+  // // update RTC regularly
+  // if ((long)(millis() - rtcUpdate) >= 0) {
+  //   rtcUpdate += RTC_UPDATE_INTERVAL;
+  //   // On long time no update, avoid multiupdate
+  //   if ((long)(millis() - rtcUpdate) >= 0) rtcUpdate = millis() + RTC_UPDATE_INTERVAL; 
+  //   if (rtc.connected) rtc.update();
+  // }
     
   // Update lifeness only on idle every second
   if ((long)(millis() - lifenessUpdate) >= 0) {
@@ -518,7 +521,7 @@ void sendDeviceInfo(Stream * sender) {
   docSend["sampling_rate"] = streamConfig.samplingRate;
   docSend["buffer_size"] = ringBuffer.getSize();
   docSend["psram"] = false;
-  docSend["rtc"] = rtc.connected;
+  docSend["rtc"] = false;
   docSend["calV"] = config.calV;
   docSend["calI"] = config.calI;
   docSend["state"] = state != SampleState::IDLE ? "busy" : "idle";
@@ -736,6 +739,7 @@ void onMQTTDisconnect() {
   logger.log("MQTT disconnected from %s", mqtt.ip);
 }
 
+
 /****************************************************
  * If ESP is connected to wifi successfully
  ****************************************************/
@@ -747,7 +751,8 @@ void onWifiConnect() {
     initMDNS();
     // The stuff todo if we have a network connection (and hopefully internet as well)
     // myTime.updateNTPTime(true); TODO: This breaks everything with the first 5 powermeters 8-13 WTF
-    // TODO: myTime.updateNTPTime();
+    myTime.updateNTPTime();
+    // timeTick.attach(5,updateTime);
     mqttUpdate = millis() + MQTT_UPDATE_INTERVAL;
     if (!mqtt.connect()) logger.log(ERROR, "Cannot connect to MQTT Server %s", mqtt.ip);
   } else {
@@ -1156,11 +1161,7 @@ void printInfoString() {
 
   logger.log("Using %d bytes %s", ringBuffer.getSize(), "RAM");
  
-  if (rtc.connected) {
-    logger.log("RTC is connected %s", rtc.lost?"but has lost time":"and has valid time");
-  } else {
-    logger.log("No RTC");
-  }
+  logger.log("No RTC");
   logger.append("Known Networks: [");
   for (size_t i = 0; i < config.netConf.numAPs; i++) {
     logger.append("%s%s", config.netConf.SSIDs[i], i < config.netConf.numAPs-1?", ":"");
