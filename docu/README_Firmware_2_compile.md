@@ -25,7 +25,7 @@
 
 ## Upload using Arduino-OTA
 
-* Select the [powermeter] you want to upload to from the avaialble network ports
+* Select the [powermeter] you want to upload to from the available network ports
 * If the corresponding [powermeter] is not shown, make sure you are in the same network or try to reset the [powermeter] (unplug it from the socket and plug it back in).
 
     <img src="/docu/figures/NetworkPort.png" width="400">

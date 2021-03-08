@@ -72,6 +72,12 @@ Info:{"error":false}
 All newlines are replaces by "_//n_".\
 To clear all log messages, use ```{"cmd":"clearLog"}```.
 
+## Calibration
+```{"cmd":"calibration","calV":<calV>,"calI":<calI>}```\
+Calibrate the [powermeter].
+```<calV>``` and ```<calI>``` are floating point values with the default value 1.0.
+Every measured voltage and current value is multiplied by the calibration factor. Power and Energy are multiplied by ```<calV>```*```<calI>```.
+
 ## Set time server
 ```{"cmd":"ntp"}```\
 Will perform an NTP time synchronization.

@@ -3,6 +3,8 @@
 The PowerMeter is a WiFi equipped electricity meter that can switch the connected appliance _on_ and _of_. 
 The development started with hardware [Version 1.0](/Schematic/Version_1). It consists of an ESP8266 microcontroller and a dedicated electricity monitoring chip. As the main idea behind this project was to record voltage and current waveforms at higher frequencies, several drawbacks for this use case were fixed with Hardware [Version 2.0](/Schematic/Version_2). It features a faster microcontroller with 8MB internal storage for data buffering, an RTC for precise sampling and time keeping and a full 16A relay so that high power appliances like dish washers can be switched _on_ and _off_. The USB connection present in [Version 1.0](/Schematic/Version_1) has been removed, but can still be added with an additional extension board.
 
+If you are interested in the whole house consumption, see the [SmartMeter](https://github.com/voelkerb/smartmeter) instead.
+
 ## Why to use?
 It's open source, easy to use, easy to build and offers lots of flexibility. 
 

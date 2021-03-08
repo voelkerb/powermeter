@@ -572,7 +572,6 @@ void sendDeviceInfo(Stream * sender) {
     docSend["rssi"] = WiFi.RSSI();
     docSend["bssid"] = Network::getBSSID();
   }
-  WiFi.RSSI();
   response = "";
   serializeJson(docSend, response);
   response = LOG_PREFIX + response;
