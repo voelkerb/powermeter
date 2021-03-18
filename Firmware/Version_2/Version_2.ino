@@ -408,7 +408,7 @@ void onIdle() {
   // Update stuff over mqtt
   if (mqtt.connected()) {
     if (millis() - mqttUpdate > MQTT_UPDATE_INTERVAL) {
-      tcpUpdate = millis();
+      mqttUpdate = millis();
     // if ((long)(millis() - mqttUpdate) >= 0) {
     //   mqttUpdate += MQTT_UPDATE_INTERVAL;
     //   // On long time no update, avoid multiupdate
