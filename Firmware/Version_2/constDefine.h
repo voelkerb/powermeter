@@ -1,6 +1,8 @@
 // Private keys can be defined in this file
 // Create it and insert e.g. LORA or WIFI keys
+#if __has_include("privateConfig.h")
 #include "privateConfig.h"
+#endif
 
 // Serial Speed and DEBUG option
 // #define SERIAL_SPEED 9600
