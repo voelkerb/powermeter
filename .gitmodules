@@ -46,3 +46,6 @@
 [submodule "Firmware/Version_1/src/time"]
 	path = Firmware/Version_1/src/time
 	url = https://github.com/voelkerb/ESP.timeHandling
+[submodule "Firmware/Version_2/src/LoRaWAN_AT"]
+	path = Firmware/Version_2/src/LoRaWAN_AT
+	url = git@github.com:voelkerb/LoRaWAN_AT.git
