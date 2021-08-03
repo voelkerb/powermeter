@@ -2,6 +2,58 @@
 
 # How to compile Firmware Version 2
 
+## Preprocessor Settings
+
+Before you want to compile the code, make sure the preprocessor settings are as you want them to be.
+Take a look at [constDefine.h](https://github.com/voelkerb/powermeter/blob/master/Firmware/Version_2/constDefine.h).
+The PowerMeter supports multiple addons such as LoRa or an additional sensor board. Depending on your configuration, the preprocessor settings must be set correctly. 
+
+### General Settings:
+
+* ```SENT_LIFENESS_TO_CLIENTS```: Uncomment to send lifeness messages with the current system time each second to connected TCP clients or over serial.
+* ```LIFENESS_UPDATE_INTERVAL```: Interval for sending lifeness messages.
+* ```SEND_INFO_ON_CLIENT_CONNECT```: Uncomment to send system info JSON dictionary automatically on TCP client connect.
+* ```USE_SERIAL```: Comment to disable serial, uncomment if you want to use serial.
+* ```SERIAL_SPEED```: Baudrate of any serial connection. The serial connectors are accessible via the extension header.
+* ```SERIAL_LOGGER```: Uncomment if you want log messages to be sent via serial.
+* ```LOG_PREFIX_SERIAL```: Prefix for logs over serial connection.
+* ```CMD_OVER_SERIAL```: Uncomment if you want commands to be processed via serial.
+* ```PS_BUF_SIZE```: Amount of PSRAM for data buffering. Arduino does only support up to 3.5MB.
+* ```DEFAULT_SR```: Default samplingrate.
+* ```LOCATION_TIME_OFFSET```: Location time offset from UTC. 
+* ```MDNS_UPDATE_INTERVAL```: Interval for MDNS updates.
+* ```TCP_UPDATE_INTERVAL```: Interval for adding TCP clients.
+* ```RTC_UPDATE_INTERVAL```: Interval for updating the RTC's time.
+* ```STREAM_SERVER_UPDATE_INTERVAL```: Interval for checking if an external TCP server is ready to receive data.
+* ```MQTT_UPDATE_INTERVAL```: Interval to send energy info over MQTT.
+* ```LOG_PREFIX```: Prefix for logs via TCP connection.
+* ```DATA_PREFIX```: Prefix for data via TCP connection.
+
+### Connection Settings:
+
+* ```STANDARD_UDP_PORT```: Standard port for UDP connections.
+* ```STANDARD_TCP_SAMPLE_PORT```: Standard port for TCP connections.
+* ```STANDARD_TCP_STREAM_PORT```: Standard port for TCP streaming e.g. via ffmpeg.
+* ```MAX_CLIENTS```: Allow at max this many TCP clients.
+* ```MAX_SEND_SIZE```: Maximum chunk size for data. Chunksize is set dynamically depending on the samplingrate.  
+
+### NTP Sampling Correction
+
+* ```NTP_CORRECT_SAMPLINGRATE```: If NTP synchronizations should be used to correct the sampling rate by means of repeating or leaving out samples.
+* ```NTP_CONFIDENCE_FOR_CORRECTION```: Required confidence for NTP sampling correction in milliseconds.
+* ```CORRECT_SAMPLING_THRESHOLD```: Drift in seconds when sampling correction should be applied.
+* ```MAX_CORRECT_SAMPLES```: Maximum number of samples to correct for one sync.
+
+### LoRaWAN Settings:
+
+* ```LORA_WAN```: Comment to disable, uncomment to enable LoRaWAN connection via an extension board with AT command firmware (e.g. [Grove LoRa E5](https://wiki.seeedstudio.com/Grove_LoRa_E5_New_Version/)). Therewith you can e.g. connect to [The Things Network](https://www.thethingsnetwork.org). Lora Credentials (such as ```APP_KEY```, ```APP_EUI``` and ```DEV_EUI``` - in case of LoRaWAN OTA Authentification) should be stored in an external ```privateConfig.h``` file (see [constDefine.h](https://github.com/voelkerb/powermeter/blob/master/Firmware/Version_2/constDefine.h) for more details).
+* ```APP_KEY```: Application key of OTA activation for TTN network.
+* ```DEV_EUI```: Device EUI for TTN network.
+* ```APP_EUI```: Application EUI of OTA activation for TTN network.
+* ```LORA_PORT```: Port over which data is sent and received.
+
+
+
 ## Compile from source using Arduino or PlatformIO
 
 * In order to upload the firmware, you must install the latest version of the Arduino ESP32 environment. See [official instructions](https://github.com/espressif/arduino-esp32/blob/master/docs/arduino-ide/boards_manager.md):
