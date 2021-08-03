@@ -27,18 +27,21 @@
 #include "src/config/config.h"
 #include "src/ringbuffer/src/ringbuffer.h"
 #include "src/mqtt/src/mqtt.h"
+#include "src/LoRaWAN_AT/src/LoRaWAN_AT.h"
 
-// Function prototypes required for e.g. platformio
+// Function prototypes required
 void IRAM_ATTR sample_ISR();
 void IRAM_ATTR sqwvTriggered(void* instance);
 void ntpSynced(unsigned int confidence);
 
+void logFunc(const char * log, ...);
+void loraDownlink(const char * data, int port, int snr, int rssi);
 
 Relay relay(RELAY_PIN_S, RELAY_PIN_R);
 
 TaskHandle_t xHandle = NULL;
 
-#ifdef USE_SERIAL
+#ifdef SERIAL_LOGGER
   // Serial logger
   StreamLogger serialLog((Stream*)&Serial, &timeStr, &LOG_PREFIX_SERIAL[0], ALL);
 #endif
@@ -54,7 +57,7 @@ MultiLogger& logger = MultiLogger::getInstance();
 Configuration config;
 
 Rtc rtc(RTC_INT);
-TimeHandler myTime(config.timeServer, LOCATION_TIME_OFFSET, &rtc, &ntpSynced);
+TimeHandler myTime(config.myConf.timeServer, LOCATION_TIME_OFFSET, &rtc, &ntpSynced);
 
 // STPM Object
 STPM stpm34(STPM_RES, STPM_CS, STPM_SYN);
@@ -84,6 +87,10 @@ volatile uint32_t timer_now;
 
 SampleState state = SampleState::IDLE;
 SampleState next_state = SampleState::IDLE;
+
+#ifdef LORA_WAN
+LoRaWAN_AT lora;
+#endif
 
 // Define it before StreamType enum redefines it
 MQTT mqtt;
@@ -154,6 +161,7 @@ uint32_t lifenessUpdate = millis();
 uint32_t mdnsUpdate = millis();
 uint32_t tcpUpdate = millis();
 uint32_t rtcUpdate = millis();
+uint32_t loraUpdate = millis();
 uint32_t mqttUpdate = millis();
 
 // HW Timer and mutex for sapmpling ISR
@@ -204,10 +212,6 @@ void (*outputWriter)(bool) = &writeChunks;
 
 /************************ SETUP *************************/
 void setup() {
-  // Set realy to true
-  // bistable relay is left as is
-  // relay.set(true);
-
   // Load config, an set relay to wished state
   config.init();  
   config.load();
@@ -230,7 +234,7 @@ void setup() {
   bool success = rtc.init();
   // Init the logging modules
   logger.setTimeGetter(&timeStr);
-  #ifdef USE_SERIAL
+  #ifdef SERIAL_LOGGER
   // Add Serial logger
   logger.addLogger(&serialLog);
   #endif
@@ -277,7 +281,7 @@ void setup() {
   stpm_mutex = xSemaphoreCreateMutex();
   // Setup STPM 32
   success = stpm34.init();
-  stpm34.setCalibration(config.calV, config.calI);
+  stpm34.setCalibration(config.myConf.calV, config.myConf.calI);
   if (!success) logger.log(ERROR, "STPM Init Failed");
   successAll &= success;
   
@@ -288,14 +292,18 @@ void setup() {
 
   // Init network connection
   Network::init(&config.netConf, onWifiConnect, onWifiDisconnect, false, &logger);
-  // Setup OTA updating
+  // Setup OTA updatinga
   setupOTA();
 
   // Resever enough bytes for large string
   response.reserve(2*COMMAND_MAX_SIZE);
 
+  #ifdef LORA_WAN
+  success = lora.init(&Serial, &logFunc, &loraDownlink);
+  lora.setOTAA(APP_EUI, DEV_EUI, APP_KEY, LORA_PORT);
+  #endif
   // Set mqtt and callbacks
-  mqtt.init(config.mqttServer, config.netConf.name);
+  mqtt.init(config.myConf.mqttServer, config.netConf.name);
   mqtt.onConnect = &onMQTTConnect;
   mqtt.onDisconnect = &onMQTTDisconnect;
   mqtt.onMessage = &mqttCallback;
@@ -347,17 +355,61 @@ void loop() {
   yield();
 }
 
+#ifdef LORA_WAN
+void loraDownlink(const char * data, int port, int snr, int rssi) {
+  logger.log("Port: %i, Data: %s, SNR: %i, RSSI: %i", port, data, snr, rssi);
+  // At max 3 bytes message:  prefix, relay state,  reset
+  // example:                 0xab    0x01/0x00     0x01/0x00/0xXX 
+
+  size_t length = strlen(data);
+  // Must be even and correct size
+  if (length != 2*LORA_MSG_SIZE) return;
+
+  const char *pos = data;
+  uint8_t val[LORA_MSG_SIZE];
+  // Parse hex string
+  for (size_t count = 0; count < sizeof(val)/sizeof(*val); count++) {
+      sscanf(pos, "%2hhx", &val[count]);
+      pos += 2;
+  }
+
+  logger.append("Decoded: [");
+  for (size_t count = 0; count < sizeof(val)/sizeof(*val); count++) {
+      logger.append("0x");
+      logger.append("%02x, ", val[count]);
+  }
+  logger.append("]");
+  logger.flushAppended();
+  
+  // Check data integrity here
+  if (val[0] != LORA_PREFIX) return;
+  // Check relay
+  if (val[1] == 0) relay.set(false);
+  else if (val[1] == 1) relay.set(true);
+  else if (val[1] == 2) relay.set(!relay.state);
+
+  // Check reset
+  if (val[2] == 1) ESP.restart();
+}
+#endif
+
+void logFunc(const char * log, ...) {
+  va_list args;
+  va_start(args, log);
+  vsnprintf(command, COMMAND_MAX_SIZE, log, args);
+  va_end(args);
+  logger.log(command);
+}
+
 void onIdleOrSampling() {
+  #ifdef CMD_OVER_SERIAL
+  // Handle serial commands
+  if (Serial.available()) handleEvent(&Serial);
+  #endif
 
   // MQTT loop
   mqtt.update();
-
-  // Handle serial requests
-  #ifdef CMD_OVER_SERIAL
-  if (Serial.available()) {
-    handleEvent(&Serial);
-  }
-  #endif
+    
 
   // Handle tcp requests
   for (size_t i = 0; i < MAX_CLIENTS; i++) {
@@ -405,6 +457,13 @@ void onIdle() {
   // If we logged during sampling, we flush now
   spiffsLog.flush();
 
+  #ifdef LORA_WAN
+  // LORA Loop
+  lora.update();
+  // Rejoin on connection error
+  if (lora.connected and not lora.joined) lora.joinNetwork();
+  #endif
+
   // Update stuff over mqtt
   if (mqtt.connected()) {
     if (millis() - mqttUpdate > MQTT_UPDATE_INTERVAL) {
@@ -438,6 +497,15 @@ void onIdle() {
     if (rtc.connected) rtc.update();
   }
     
+  // Update LORA only on idle every second
+  if (millis() - loraUpdate > LORA_UPDATE_INTERVAL) {
+    loraUpdate = millis();
+    if (lora.connected and lora.joined) {
+      sendStatusLoRa();
+    }
+    Serial.println("AT\r\n");
+  }
+
   // Update lifeness only on idle every second
   if (millis() - lifenessUpdate > LIFENESS_UPDATE_INTERVAL) {
     lifenessUpdate = millis();
@@ -488,6 +556,45 @@ void onIdle() {
   }
 }
 
+#ifdef LORA_WAN
+/****************************************************
+ * Send Status info over mqtt 
+ ****************************************************/
+void sendStatusLoRa() {
+  float values[5] = {0.0};
+  // Lock stpm before using it
+  xSemaphoreTake(stpm_mutex, portMAX_DELAY);
+  values[0] = stpm34.readActivePower(1);
+  if (values[0] < 0) values[0] = 0.0;
+  values[1] = stpm34.readReactivePower(1);
+  // We want current in A
+  values[2] = stpm34.readRMSCurrent(1)/1000.0;
+  // TODO: Something is still wrong with voltage calculation
+  values[3] = stpm34.readRMSVoltage(1)+230.0;
+  // unit is watt hours and we want kwh
+  values[4] = stpm34.readActiveEnergy(1)/1000.0;
+  // Unlock stpm 
+  xSemaphoreGive(stpm_mutex);
+
+  uint32_t ts = myTime.timestamp().seconds;
+  uint32_t rs = relay.state;
+  
+  snprintf(command, COMMAND_MAX_SIZE, "AT+CMSGHEX=\"");
+  for (size_t i = 0; i < sizeof(values)/sizeof(values[0]); i++) {
+    byte *b = (byte *)&values[i];
+    snprintf(command + strlen(command), COMMAND_MAX_SIZE - strlen(command), "%02X%02X%02x%02x", b[3], b[2], b[1], b[0]);
+  }
+  byte *b = (byte *)&ts;
+  snprintf(command + strlen(command), COMMAND_MAX_SIZE - strlen(command), "%02X%02X%02x%02x", b[3], b[2], b[1], b[0]);
+  byte *c = (byte *)&rs;
+  snprintf(command + strlen(command), COMMAND_MAX_SIZE - strlen(command), "%02X%02X%02x%02x", c[3], c[2], c[1], c[0]);
+  snprintf(command + strlen(command), COMMAND_MAX_SIZE - strlen(command), "\"");
+  // snprintf(command, COMMAND_MAX_SIZE, 
+  //   "AT+MSG=\"'P':%.2f,'Q':%.2f,'E':%.2f,'V':%.2f,'I':%.2f,'ts':'%s'\"",p,q,e,v,i,ts);
+  lora.sendCommand(command);
+}
+#endif
+
 /****************************************************
  * Send Status info over mqtt 
  ****************************************************/
@@ -521,7 +628,7 @@ void sendStatusMQTT() {
   xSemaphoreGive(stpm_mutex);
 
   docSend["volt"] = value;
-  docSend["ts"] = myTime.timestampStr(true);
+  docSend["ts"] = myTime.timestamp().seconds;
   response = "";
   serializeJson(docSend, response);
   // logger.log("MQTT msg: %s", response.c_str());
@@ -545,20 +652,20 @@ void sendDeviceInfo(Stream * sender) {
   docSend["sys_time"] = myTime.timeStr();
   docSend["name"] = config.netConf.name;
   docSend["ip"] = Network::localIP().toString();
-  docSend["mqtt_server"] = config.mqttServer;
-  docSend["stream_server"] = config.streamServer;
-  docSend["time_server"] = config.timeServer;
+  docSend["mqtt_server"] = config.myConf.mqttServer;
+  docSend["stream_server"] = config.myConf.streamServer;
+  docSend["time_server"] = config.myConf.timeServer;
   docSend["sampling_rate"] = streamConfig.samplingRate;
   docSend["buffer_size"] = ringBuffer.getSize();
   docSend["psram"] = ringBuffer.inPSRAM();
   docSend["rtc"] = rtc.connected;
-  docSend["calV"] = config.calV;
-  docSend["calI"] = config.calI;
+  docSend["calV"] = config.myConf.calV;
+  docSend["calI"] = config.myConf.calI;
   docSend["state"] = state != SampleState::IDLE ? "busy" : "idle";
   docSend["relay"] = relay.state;
   JsonArray array = docSend.createNestedArray("calibration");
-  array.add(config.calV);
-  array.add(config.calI);
+  array.add(config.myConf.calV);
+  array.add(config.myConf.calI);
 
   String ssids = "[";
   for (size_t i = 0; i < config.netConf.numAPs; i++) {
@@ -931,7 +1038,7 @@ void writeDataMQTT(bool tail) {
     JsonObject objSample = docSample.to<JsonObject>();
     objSample.clear();
     objSample["unit"] = unitStr;
-    objSample["ts"] = myTime.timestampStr();
+    objSample["ts"] = myTime.timestamp().seconds;
     ringBuffer.read((uint8_t*)&values[0], streamConfig.measurementBytes);
     // JsonArray array = docSend["values"].to<JsonArray>();
     // for (int i = 0; i < streamConfig.numValues; i++) objSample["values"][i] = values[i];
@@ -1523,13 +1630,13 @@ void checkStreamServer(void * pvParameters) {
     if (!exStreamServer.connected()                         // If not already connected
         and state == SampleState::IDLE                      // and in idle mode
         and Network::connected and not Network::apMode      // Network is STA mode
-        and strcmp(config.streamServer, NO_SERVER) != 0) {  // and server is set
-      if (exStreamServer.connect(config.streamServer, STANDARD_TCP_STREAM_PORT)) {
-        logger.log("Connected to StreamServer: %s", config.streamServer);
+        and strcmp(config.myConf.streamServer, NO_SERVER) != 0) {  // and server is set
+      if (exStreamServer.connect(config.myConf.streamServer, STANDARD_TCP_STREAM_PORT)) {
+        logger.log("Connected to StreamServer: %s", config.myConf.streamServer);
         onClientConnect(exStreamServer);
       } else {
         if (first) {
-          logger.log(WARNING, "Cannot connect to StreamServer: %s", config.streamServer);
+          logger.log(WARNING, "Cannot connect to StreamServer: %s", config.myConf.streamServer);
           first = false;
         }
       }
@@ -1547,9 +1654,9 @@ void checkStreamServer(void * pvParameters) {
  * automatically if it is there. Enable checker 
  ****************************************************/
 void initStreamServer() {
-  if (strcmp(config.streamServer, NO_SERVER) != 0 and !exStreamServer.connected()) {
-    // logger.log("Try to connect Stream Server: %s", config.streamServer);
-    // exStreamServer.connect(config.streamServer, STANDARD_TCP_STREAM_PORT);
+  if (strcmp(config.myConf.streamServer, NO_SERVER) != 0 and !exStreamServer.connected()) {
+    // logger.log("Try to connect Stream Server: %s", config.myConf.streamServer);
+    // exStreamServer.connect(config.myConf.streamServer, STANDARD_TCP_STREAM_PORT);
     // Handle reconnects
     if (streamServerTaskHandle == NULL) {
       xTaskCreate(
@@ -1761,13 +1868,13 @@ void setupOTA() {
   });
 
   ArduinoOTA.onEnd([]() {
-    #ifdef USE_SERIAL
+    #ifdef SERIAL_LOGGER
     logger.log("End");
     #endif
   });
 
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    #ifdef USE_SERIAL
+    #ifdef SERIAL_LOGGER
     unsigned int percent = (progress / (total / 100));
     if (percent != oldPercent) {
       Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
@@ -1777,7 +1884,7 @@ void setupOTA() {
   });
   
   ArduinoOTA.onError([](ota_error_t error) {
-    #ifdef USE_SERIAL
+    #ifdef SERIAL_LOGGER
     Serial.printf("Error[%u]: ", error);
     if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
     else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");

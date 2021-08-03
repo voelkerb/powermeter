@@ -36,7 +36,7 @@ void handleEvent(Stream * getter) {
       response = LOG_PREFIX + response;
       getter->println(response.c_str());
 
-      #ifdef USE_SERIAL
+      #ifdef SERIAL_LOGGER
         if ((Stream*)&Serial != getter) {
           serialLog.log(response.c_str());
         }
@@ -403,7 +403,7 @@ void handleJSON() {
         streamLog[i]->setLogType(newLogType);
       }
     }
-    #ifdef USE_SERIAL
+    #ifdef SERIAL_LOGGER
       if (newGetter == (Stream*)&Serial) {
         found = -1;
         serialLog._type = newLogType;
@@ -504,7 +504,7 @@ void handleJSON() {
         docSend["msg"] = response;
         return;
       }
-      char * address = config.mqttServer;
+      char * address = config.myConf.mqttServer;
       response = F("Set MQTTServer address to: ");
       response += address;
       //docSend["msg"] = snprintf( %s", name);
@@ -512,7 +512,7 @@ void handleJSON() {
       docSend["mqtt_server"] = address;
       docSend["error"] = false;
       mqtt.disconnect();
-      mqtt.init(config.mqttServer, config.netConf.name);
+      mqtt.init(config.myConf.mqttServer, config.netConf.name);
       mqtt.connect();
     } else {
       setBusyResponse();
@@ -539,7 +539,7 @@ void handleJSON() {
         docSend["msg"] = response;
         return;
       }
-      char * address = config.streamServer;
+      char * address = config.myConf.streamServer;
       response = F("Set StreamServer address to: ");
       response += address;
       //docSend["msg"] = snprintf( %s", name);
@@ -572,7 +572,7 @@ void handleJSON() {
         docSend["msg"] = response;
         return;
       }
-      char * address = config.timeServer;
+      char * address = config.myConf.timeServer;
       response = F("Set TimeServer address to: ");
       response += address;
       //docSend["msg"] = snprintf( %s", name);
@@ -734,7 +734,7 @@ void handleJSON() {
         return;
       }
       config.setCalibration(valueV, valueI);
-      stpm34.setCalibration(config.calV, config.calI);
+      stpm34.setCalibration(config.myConf.calV, config.myConf.calI);
       response = "Calibration set v: ";
       response +=  String(valueV, 4);
       response += " , i: ";
@@ -780,6 +780,31 @@ void handleJSON() {
       docSend["state"] = "busy";
     }
   }
+  #ifdef LORA_WAN
+  /*********************** LORA COMMAND ****************************/
+  // e.g. {"cmd":"getLog"}
+  else if (strcmp(cmd, CMD_LORA) == 0) {
+
+    JsonVariant msg_Variant = root["msg"];
+    if (msg_Variant.isNull()) {
+      docSend["msg"] = "Missing lora msg";
+      docSend["error"] = true;
+      return;
+    }
+    docSend["error"] = false;
+    const char * msg = root["msg"];
+    if (strcmp(msg, "join") == 0) {
+      lora.joinNetwork();
+    } else if (strcmp(msg, "info") == 0) {
+      lora.getInfo();
+    } else {
+      lora.sendCommand(msg);
+    }
+    docSend["connected"] = lora.connected;
+    docSend["joined"] = lora.joined;
+    // TODO: parse answer somehow
+  }
+  #endif
   /*********************** UNKNOWN COMMAND ****************************/
   else {
     response = "unknown command";
