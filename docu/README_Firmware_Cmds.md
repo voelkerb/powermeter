@@ -156,7 +156,111 @@ Mqtt can also be used to send any command. Special topics are used to switch the
   ...
   ```
 
-## Getting Data
+## LoRaWAN
+If a supported module is connected to the expansion header and the Firmware is configured to make use of it (see [compile info](https://github.com/voelkerb/powermeter/blob/master/docu/README_Firmware_2_compile.md)), data is also sent via LoRaWAN.
+
+Credentials for OTA activation must be set at compile time. We may add this to the configuration later on.
+
+### Communicate with the module
+
+* ```{"cmd":"lora", "msg":"info"}```\
+Send this command to get info about the currently set DEV_EUI and APP_EUI and the connection status. Sample output:
+  ```bash
+  Info:[I]08/03 18:02:03: LoRa-TX: AT+ID
+  Info:[I]08/03 18:02:03: LoRa-RX: +ID: DevAddr, <XX:XX:XX:XX>
+  Info:[I]08/03 18:02:03: LoRa-RX: +ID: DevEui, <XX:XX:XX:XX:XX:XX:XX:XX>
+  Info:[I]08/03 18:02:03: LoRa-RX: +ID: AppEui, <XX:XX:XX:XX:XX:XX:XX:XX>
+  Info:{"error":false,"connected":true,"joined":true}
+  ```
+* ```{"cmd":"lora", "msg":"join"}```\
+Try to join the network.
+Sample output:
+  ```bash
+  Info:[I]08/03 18:04:17: LoRa-TX: AT+MODE=LWOTAA
+  Info:[I]08/03 18:04:17: LoRa-RX: +MODE: LWOTAA
+  Info:[I]08/03 18:04:17: LoRa-TX: AT+DR=EU868
+  Info:[I]08/03 18:04:17: LoRa-RX: +DR: EU868
+  Info:[I]08/03 18:04:17: LoRa-TX: AT+CH=NUM,0-2
+  Info:[I]08/03 18:04:17: LoRa-RX: +CH: NUM, 0-2
+  Info:[I]08/03 18:04:17: LoRa-TX: AT+KEY=APPKEY,"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+  Info:[I]08/03 18:04:17: LoRa-RX: +KEY: APPKEY XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+  Info:[I]08/03 18:04:17: LoRa-TX: AT+CLASS=A
+  Info:[I]08/03 18:04:17: LoRa-RX: +CLASS: A
+  Info:[I]08/03 18:04:17: LoRa-TX: AT+JOIN
+  Info:[I]08/03 18:04:17: LoRa-RX: +JOIN: Start
+  Info:[I]08/03 18:04:17: LoRa-RX: +JOIN: NORMAL
+  Info:[I]08/03 18:04:26: LoRa-RX: +JOIN: Network joined
+  Info:[I]08/03 18:04:26: LoRa-RX: +JOIN: NetID 000013 DevAddr <XX:XX:XX:XX>
+  Info:[I]08/03 18:04:26: LoRa-RX: +JOIN: Done
+  ```
+* ```{"cmd":"lora", "msg":"AT"}```\
+Sample output:
+  ```bash
+  Info:[I]08/03 18:04:11: LoRa-TX: AT
+  Info:{"error":false,"connected":true,"joined":true}
+  Info:[I]08/03 18:04:11: LoRa-RX: +AT: OK
+  ```
+Anything else is regarded as an AT command. See the modules documentation for more detail: [Grove-E5](https://files.seeedstudio.com/products/317990687/res/LoRa-E5%20AT%20Command%20Specification_V1.0%20.pdf)
+
+
+### UpLink Messages
+
+If the module is connected, the code will automatically try to join the LoRaWAN network each ```LORA_UPDATE_INTERVAL''' seconds. If connected, active and reactive power, RMS voltage and current and electrical energy is sent with the relay state and the system time as raw bytes. 
+All values are send as little-endian in the following order:
+
+* active power as 4 byte float value
+* reactive power as 4 byte float value
+* RMS current as 4 byte float value
+* RMS voltage as 4 byte float value
+* electrical energy as 4 byte float value
+* unix timestamp as 4 byte unsigned int
+* relay state as 1 byte unsigned int
+
+These can be decoded in the TTN network application layer e.g. using the following uplink formatter:
+
+```JavaScript
+function Decoder(bytes, port) {
+  var decoded = {};
+  if (port == 8) {  // Adjust the port depending on your config
+    var values = ["active","reactive","irms","vrms","energy","ts","relay"];
+    var valueBytes = [4, 4, 4, 4, 4, 4, 1];
+    var i = 0;
+    for (let k = 0; k < values.length; k++) {
+      if (i >= bytes.length) { break; }
+      var buf = new ArrayBuffer(valueBytes[k]);  // Create a buffer
+      var view = new DataView(buf);  // Create a data view of it
+      // Set individual bytes LE
+      for (let j=0; j < valueBytes[k]; j++) { view.setUint8(valueBytes[k]-1-j, bytes[i+j]); }
+      var num = 0;
+      if (values[k] == "ts") { num = view.getUint32(0); }
+      else if (values[k] == "relay") { num = view.getUint8(0); } 
+      else { num = view.getFloat32(0); }
+      decoded[values[k]] = num;
+      i += valueBytes[k];
+    }
+  }
+  return decoded;
+}
+```
+
+
+### DownLink Messages
+
+Down link messages must be sent on the same port according to the following format:
+```<prefix><relayState><reset>```.
+
+* ```<prefix>```: Should match the config and exists to check data integrity.
+* ```<relayState>```: 1 byte unsigned int. ```0``` to switch off, ```1``` to switch on, and ```2``` to toggle.
+* ```<reset>```: 1 byte unsigned int. ```0``` to do nothing, ```1``` to restart the PowerMeter.
+If you have configured TTN to be accessible via an MQTT server, you can toggle the relay using:
+
+```
+mosquitto_pub -h <ttnLocation>.cloud.thethings.network -d -t '<ttnVerssion>/<yourApplicationID>@ttn/devices/<yourDeviceID>/down/push' -u <yourMqttUser> -P <yourMqttPWD> -m '{"downlinks":[{"f_port": 8,"frm_payload":"AB0200","priority": "NORMAL"}]}' -d
+```
+The message must be a JSON dictionary in the shown format. The DownLink message is set via the key ```frm_payload``` and must be base64 encoded. 
+
+
+## Getting High Frequency Data
 Finally, to get some high frequency data out of the powermeters beyond whats possible using [mqtt](#mqtt), you have multiple possibilities. 
 
 ### Using FFmpeg
@@ -244,6 +348,7 @@ Send this command to stop sampling or streaming. As a response, you get informat
 ```bash
 Info:{"msg":"Received stop command","sample_duration":16157,"samples":16,"sent_samples":16,"start_ts":"1614697441.119","stop_ts":"1614697457.276","ip":"192.168.0.138","avg_rate":0.955618,"cmd":"stop"}
 ```
+
 
 ## Misc
 ### Availability
