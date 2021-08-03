@@ -1,4 +1,6 @@
-
+// Private keys can be defined in this file
+// Create it and insert e.g. LORA or WIFI keys
+#include "privateConfig.h"
 
 // Serial Speed and DEBUG option
 // #define SERIAL_SPEED 9600
@@ -6,13 +8,25 @@
 // #define DEBUG_DEEP
 #define SENT_LIFENESS_TO_CLIENTS
 
-
-#define VERSION "2.2"
+// Version string
+#define VERSION "2.3"
 
 #define SEND_INFO_ON_CLIENT_CONNECT
-// TODO:
+
 #define USE_SERIAL
+// #define SERIAL_LOGGER
 // #define CMD_OVER_SERIAL
+#define LORA_WAN
+
+#if defined(SERIAL_LOGGER) && !defined(USE_SERIAL)
+#error CONFIG ERROR: cannot use seriallog without serial (USE_SERIAL defined) 
+#endif
+#if defined(LORA_WAN) && !defined(USE_SERIAL)
+#error CONFIG ERROR: cannot use LORA WAN module without serial (USE_SERIAL defined) 
+#endif
+#if defined(LORA_WAN) && defined(SERIAL_LOGGER)
+#error CONFIG ERROR: cannot use LORA WAN module and serial logger
+#endif
 
 // Default values
 #define STANDARD_UDP_PORT 54323
@@ -36,6 +50,7 @@
 #define RTC_UPDATE_INTERVAL 30000
 #define STREAM_SERVER_UPDATE_INTERVAL 30000
 #define MQTT_UPDATE_INTERVAL 5000
+#define LORA_UPDATE_INTERVAL 20000
 
 #define MAX_CNT_BEFORE_DISCONNECT 3
 // We allow a max of 3 tcp clients for performance reasons
@@ -113,6 +128,8 @@ const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define CMD_TIME_SERVER "timeServer"
 #define CMD_LOG_LEVEL "log"
 #define CMD_LOG_CALIBRATION "calibration"
+#define CMD_LORA "lora"
+
 
 
 #define LOG_LEVEL_ALL "all"
@@ -145,6 +162,26 @@ const int MAX_MQTT_PUB_TOPIC_SAMPLE = sizeof(MQTT_TOPIC_BASE) + sizeof(MQTT_TOPI
 const int MAX_MQTT_PUB_TOPIC_INFO = sizeof(MQTT_TOPIC_BASE) + sizeof(MQTT_TOPIC_STATE) + sizeof(MQTT_TOPIC_INFO) + 4*sizeof(MQTT_TOPIC_SEPARATOR) + 2;
 
 
+// LORA_CONFIG
+#define LORA_MSG_SIZE 3
+#define LORA_PREFIX 0xab
+
+// #define the following in your privateConfig.h
+#ifndef APP_KEY
+#define APP_KEY {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}
+#endif
+#ifndef DEV_EUI
+#define DEV_EUI {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}
+#endif
+#ifndef APP_EUI
+#define APP_EUI {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}
+#endif
+#ifndef LORA_PORT
+#define LORA_PORT 8
+#endif
+
+
+//  Round arbitrary data types
 template < typename TOut, typename TIn >
 TOut round2( TIn value ) {
    return static_cast<TOut>((int)(value * 100 + 0.5) / 100.0);
