@@ -300,7 +300,9 @@ void setup() {
 
   #ifdef LORA_WAN
   success = lora.init(&Serial, &logFunc, &loraDownlink);
-  lora.setOTAA(APP_EUI, DEV_EUI, APP_KEY, LORA_PORT);
+  // lora.setOTAA(APP_EUI, DEV_EUI, APP_KEY, LORA_PORT);
+  // LoRaWANConfiguration loraConf = {APP_EUI, DEV_EUI, APP_KEY, LORA_PORT};
+  lora.setOTAA((LoRaWANConfiguration){APP_EUI, DEV_EUI, APP_KEY, LORA_PORT});
   #endif
   // Set mqtt and callbacks
   mqtt.init(config.myConf.mqttServer, config.netConf.name);
@@ -577,20 +579,14 @@ void sendStatusLoRa() {
   xSemaphoreGive(stpm_mutex);
 
   uint32_t ts = myTime.timestamp().seconds;
-  uint32_t rs = relay.state;
+  uint8_t rs = relay.state;
   
-  snprintf(command, COMMAND_MAX_SIZE, "AT+CMSGHEX=\"");
-  for (size_t i = 0; i < sizeof(values)/sizeof(values[0]); i++) {
-    byte *b = (byte *)&values[i];
-    snprintf(command + strlen(command), COMMAND_MAX_SIZE - strlen(command), "%02X%02X%02x%02x", b[3], b[2], b[1], b[0]);
-  }
-  byte *b = (byte *)&ts;
-  snprintf(command + strlen(command), COMMAND_MAX_SIZE - strlen(command), "%02X%02X%02x%02x", b[3], b[2], b[1], b[0]);
-  byte *c = (byte *)&rs;
-  snprintf(command + strlen(command), COMMAND_MAX_SIZE - strlen(command), "%02X%02X%02x%02x", c[3], c[2], c[1], c[0]);
-  snprintf(command + strlen(command), COMMAND_MAX_SIZE - strlen(command), "\"");
-  // snprintf(command, COMMAND_MAX_SIZE, 
-  //   "AT+MSG=\"'P':%.2f,'Q':%.2f,'E':%.2f,'V':%.2f,'I':%.2f,'ts':'%s'\"",p,q,e,v,i,ts);
+  logger.log("Sizeof values: %li", sizeof(values));
+  char * head = command;
+  head += snprintf(head, COMMAND_MAX_SIZE, "AT+CMSGHEX=\"%s", lora.toHexStr((uint8_t*)&values[0], sizeof(values)));
+  head += snprintf(head, COMMAND_MAX_SIZE - strlen(command), "%s", lora.toHexStr((uint8_t*)&ts, sizeof(ts)));
+  head += snprintf(head, COMMAND_MAX_SIZE - strlen(command), "%s\"", lora.toHexStr((uint8_t*)&rs, sizeof(rs)));
+
   lora.sendCommand(command);
 }
 #endif
