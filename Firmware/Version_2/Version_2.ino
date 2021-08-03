@@ -130,7 +130,6 @@ volatile long freq = 0;
 // TCP clients and current connected state, each client is assigned a logger
 WiFiClient client[MAX_CLIENTS];
 bool clientConnected[MAX_CLIENTS] = {false};
-int clientConnectionLossCnt[MAX_CLIENTS] = {0};
 StreamLogger * streamLog[MAX_CLIENTS];
 
 // Strean client is for ffmpeg direct streaming
@@ -300,8 +299,6 @@ void setup() {
 
   #ifdef LORA_WAN
   success = lora.init(&Serial, &logFunc, &loraDownlink);
-  // lora.setOTAA(APP_EUI, DEV_EUI, APP_KEY, LORA_PORT);
-  // LoRaWANConfiguration loraConf = {APP_EUI, DEV_EUI, APP_KEY, LORA_PORT};
   lora.setOTAA((LoRaWANConfiguration){APP_EUI, DEV_EUI, APP_KEY, LORA_PORT});
   #endif
   // Set mqtt and callbacks
@@ -429,18 +426,9 @@ void onIdleOrSampling() {
     for (size_t i = 0; i < MAX_CLIENTS; i++) {
       if (clientConnected[i]) {
         if (!client[i].connected()) {
-          logger.log(WARNING, "client %s not connected for %is", client[i].remoteIP().toString().c_str(), clientConnectionLossCnt[i]);
-          // client[i].connected() may fire even if connected, therefore we use this dirty hack
-          // Only if multiple times disconnect seen, actually disconnect it.
-          // NOTE: What happens on client write in this case?
-          if (clientConnectionLossCnt[i] >= MAX_CNT_BEFORE_DISCONNECT) {
-            onClientDisconnect(client[i], i);
-            clientConnected[i] = false;
-          }
-          clientConnectionLossCnt[i]++;
-        } else {
-          clientConnectionLossCnt[i] = 0;
-        }
+          onClientDisconnect(client[i], i);
+          clientConnected[i] = false;
+        } 
       }
     }
 
@@ -505,7 +493,6 @@ void onIdle() {
     if (lora.connected and lora.joined) {
       sendStatusLoRa();
     }
-    Serial.println("AT\r\n");
   }
 
   // Update lifeness only on idle every second
@@ -949,7 +936,6 @@ void onClientConnect(WiFiClient &newClient) {
       client[i] = newClient;
       client[i].setNoDelay(true);
       client[i].setTimeout(10);
-      clientConnectionLossCnt[i] = 0;
       // Set connected flag
       clientConnected[i] = true;
       streamLog[i]->_type = INFO; // This might be later reset

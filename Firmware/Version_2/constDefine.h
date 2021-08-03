@@ -4,16 +4,17 @@
 #include "privateConfig.h"
 #endif
 
-// Serial Speed and DEBUG option
-// #define SERIAL_SPEED 9600
-#define SERIAL_SPEED 115200
-// #define DEBUG_DEEP
-#define SENT_LIFENESS_TO_CLIENTS
-
 // Version string
 #define VERSION "2.3"
 
+// #define DEBUG_DEEP
+#define SENT_LIFENESS_TO_CLIENTS
+
 #define SEND_INFO_ON_CLIENT_CONNECT
+
+// Serial Speed and DEBUG option
+// #define SERIAL_SPEED 9600
+#define SERIAL_SPEED 115200
 
 #define USE_SERIAL
 // #define SERIAL_LOGGER
@@ -54,7 +55,6 @@
 #define MQTT_UPDATE_INTERVAL 5000
 #define LORA_UPDATE_INTERVAL 20000
 
-#define MAX_CNT_BEFORE_DISCONNECT 3
 // We allow a max of 3 tcp clients for performance reasons
 #define MAX_CLIENTS 3
 
