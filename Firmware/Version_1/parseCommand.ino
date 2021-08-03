@@ -571,7 +571,7 @@ void handleJSON() {
         docSend["msg"] = response;
         return;
       }
-      char * address = config.timeServer;
+      char * address = config.myConf.timeServer;
       response = F("Set TimeServer address to: ");
       response += address;
       //docSend["msg"] = snprintf( %s", name);
