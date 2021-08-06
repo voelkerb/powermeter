@@ -126,6 +126,7 @@ const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define CMD_NTP "ntp"
 #define CMD_ADD_WIFI "addWifi"
 #define CMD_REMOVE_WIFI "delWifi"
+#define CMD_RESET_ENERGY "resetEnergy"
 #define CMD_CLEAR_LOG "clearLog"
 #define CMD_GET_LOG "getLog"
 #define CMD_MQTT_SERVER "mqttServer"
