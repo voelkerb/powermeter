@@ -707,7 +707,7 @@ void handleJSON() {
 
   /*********************** Calibration COMMAND ****************************/
     // e.g. {"cmd":"calibration","calV":1.0,"calI":1.0}
-  else if (strcmp(cmd, CMD_LOG_CALIBRATION) == 0) {
+  else if (strcmp(cmd, CMD_CALIBRATION) == 0) {
     if (state == SampleState::IDLE) {
       JsonVariant cal_V_Variant = root["calV"];
       JsonVariant cal_I_Variant = root["calI"];

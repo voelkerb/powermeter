@@ -55,7 +55,7 @@
 #define STREAM_SERVER_UPDATE_INTERVAL 30000
 #define MQTT_UPDATE_INTERVAL 5000
 #define LORA_UPDATE_INTERVAL 20000
-#define ENERGY_UPDATE_INTERVAL 30000
+#define ENERGY_UPDATE_INTERVAL 19000
 
 // We allow a max of 3 tcp clients for performance reasons
 #define MAX_CLIENTS 3
@@ -133,7 +133,7 @@ const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define CMD_STREAM_SERVER "streamServer"
 #define CMD_TIME_SERVER "timeServer"
 #define CMD_LOG_LEVEL "log"
-#define CMD_LOG_CALIBRATION "calibration"
+#define CMD_CALIBRATION "calibration"
 #define CMD_LORA "lora"
 
 
