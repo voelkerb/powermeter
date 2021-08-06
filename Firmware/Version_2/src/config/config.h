@@ -41,28 +41,30 @@
 #define MAX_PWD_LEN MAX_STRING_LEN
 
 #define NAME_START_ADDRESS 0
-#define WIFI_START_ADDRESS NAME_START_ADDRESS+MAX_NAME_LEN+1
-#define MQTT_START_ADDRESS WIFI_START_ADDRESS+MAX_WIFI_APS*(MAX_SSID_LEN+MAX_PWD_LEN+2)
-#define RELAY_STATE_START_ADDRESS MQTT_START_ADDRESS+MAX_DNS_LEN+1
-#define STREAM_SERVER_ADDRESS RELAY_STATE_START_ADDRESS+1
-#define TIME_SERVER_ADDRESS STREAM_SERVER_ADDRESS+MAX_DNS_LEN+1
+// #define WIFI_START_ADDRESS NAME_START_ADDRESS+MAX_NAME_LEN+1
+// #define MQTT_START_ADDRESS WIFI_START_ADDRESS+MAX_WIFI_APS*(MAX_SSID_LEN+MAX_PWD_LEN+2)
+// #define RELAY_STATE_START_ADDRESS MQTT_START_ADDRESS+MAX_DNS_LEN+1
+// #define STREAM_SERVER_ADDRESS RELAY_STATE_START_ADDRESS+1
+// #define TIME_SERVER_ADDRESS STREAM_SERVER_ADDRESS+MAX_DNS_LEN+1
 
-#define CALIBRATION_V_START_ADDRESS TIME_SERVER_ADDRESS+MAX_DNS_LEN+1
-#define CALIBRATION_I_START_ADDRESS CALIBRATION_V_START_ADDRESS+sizeof(float)
+// #define CALIBRATION_V_START_ADDRESS TIME_SERVER_ADDRESS+MAX_DNS_LEN+1
+// #define CALIBRATION_I_START_ADDRESS CALIBRATION_V_START_ADDRESS+sizeof(float)
 
 // Add configs here
-#define EEPROM_SIZE CALIBRATION_I_START_ADDRESS+sizeof(float)+2
+// #define EEPROM_SIZE CALIBRATION_I_START_ADDRESS+sizeof(float)+2
+#define EEPROM_SIZE sizeof(NetworkConf)+sizeof(MeterConfiguration)+2
 
 #define NO_SERVER "-"
  
 #define MAX_LOADER_SIZE 5
 
-struct MeterConfiguration {
+// packed required to store in EEEPROM efficiently
+struct __attribute__((__packed__)) MeterConfiguration {
   //NOTE: Relay state must be first in configuration
   bool relayState = false;                  // State of the relay
+  double energy = 0.0;                      // amount of energy consumed (Wh)
   float calI = 1.0f;                        // Calibration parameter for current
   float calV = 1.0f;                        // Calibration parameter for voltage
-  float energy = 0.0f;                      // amount of energy consumed (Wh)
   char mqttServer[MAX_DNS_LEN] = {'\0'};    // MQTT Server DNS name
   char streamServer[MAX_DNS_LEN] = {'\0'};  // Stream Server DNS name
   char timeServer[MAX_DNS_LEN] = {'\0'};    // Time Server DNS name
@@ -89,6 +91,7 @@ class Configuration {
     void setTimeServerAddress(char * serverAddress);
     bool getRelayState();
     void setRelayState(bool value);
+    void setEnergy(double energy);
     void setCalibration(float valueV, float valueI);
 
     NetworkConf netConf;

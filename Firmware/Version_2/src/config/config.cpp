@@ -19,13 +19,13 @@ Configuration::Configuration() {
   snprintf(myConf.timeServer, MAX_DNS_LEN, "");
   myConf.relayState = false;
   myConf.calV = myConf.calI = 1.0;
-  myConf.energy = 0.0f;
+  myConf.energy = 0.0;
   myConf.resetHour = myConf.resetMinute = -1;
 }
 
 void Configuration::init() {
   // Load the MDNS name from eeprom
-  EEPROM.begin(511);
+  EEPROM.begin(EEPROM_SIZE);
   static_assert(EEPROM_SIZE <= 512, "Max eeprom size is 512");
 }
 
@@ -56,7 +56,7 @@ void Configuration::makeDefault(bool resetName) {
   myConf.relayState = true;
 
   myConf.calV = myConf.calI = 1.0f;
-  myConf.energy = 0.0f;
+  myConf.energy = 0.0;
   myConf.resetHour = myConf.resetMinute = -1;
 }
 
@@ -69,7 +69,7 @@ void Configuration::load() {
 
   EEPROM.get(address, myConf);
   address += sizeof(myConf);
-  getRelayState();
+  // getRelayState();
 
   // sanity check
   if (isnan(myConf.calV) or myConf.calV == NULL or myConf.calV < 0.1 or myConf.calV > 10.0) myConf.calV = 1.0;
@@ -107,6 +107,14 @@ bool Configuration::getRelayState() {
   EEPROM.get(address, myConf.relayState);
   // EEPROM.get(RELAY_STATE_START_ADDRESS, myConf.relayState);
   return myConf.relayState;
+}
+
+void Configuration::setEnergy(double energy) {
+  uint32_t address = NAME_START_ADDRESS + sizeof(netConf) + sizeof(myConf.relayState);
+  myConf.energy = energy;
+  EEPROM.put(address, myConf.energy);
+  EEPROM.commit();
+  // storeMyConf();
 }
 
 void Configuration::setRelayState(bool value) {
