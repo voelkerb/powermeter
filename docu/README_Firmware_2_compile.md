@@ -8,6 +8,17 @@ Before you want to compile the code, make sure the preprocessor settings are as 
 Take a look at [constDefine.h](https://github.com/voelkerb/PowerMeter/blob/master/Firmware/Version_2/constDefine.h).
 The PowerMeter supports multiple addons such as LoRa or an additional sensor board. Depending on your configuration, the preprocessor settings must be set correctly. 
 
+### Standard Settings:
+You can set some standard WiFi configurations which will also be kept on a configuration reset. Simply add you WiFi credentials to a file named ```privateConfig.h``` under _src/config/_  
+```c++
+#define NUM_STANDARD_WIFIS 2
+
+const char * MY_STANDARD_WIFIS[] = {
+     /*SSID*/ "mySecretAP1", /*PWD*/ "mySecret1",
+     /*SSID*/ "mySecretAP2", /*PWD*/ "mySecret2",
+};
+```
+
 ### General Settings:
 
 * ```SENT_LIFENESS_TO_CLIENTS```: Uncomment to send lifeness messages with the current system time each second to connected TCP clients or over serial.
@@ -48,7 +59,7 @@ The PowerMeter supports multiple addons such as LoRa or an additional sensor boa
 
 ### LoRaWAN Settings:
 
-* ```LORA_WAN```: Comment to disable, uncomment to enable LoRaWAN connection via an extension board with AT command firmware (e.g. [Grove LoRa E5](https://wiki.seeedstudio.com/Grove_LoRa_E5_New_Version/)). Therewith you can e.g. connect to [The Things Network](https://www.thethingsnetwork.org). Lora Credentials (such as ```APP_KEY```, ```APP_EUI``` and ```DEV_EUI``` - in case of LoRaWAN OTA Authentification) should be stored in an external ```privateConfig.h``` file (see [constDefine.h](https://github.com/voelkerb/PowerMeter/blob/master/Firmware/Version_2/constDefine.h) for more details).
+* ```LORA_WAN```: Comment to disable, uncomment to enable LoRaWAN connection via an extension board with AT command firmware (e.g. [Grove LoRa E5](https://wiki.seeedstudio.com/Grove_LoRa_E5_New_Version/)). Therewith you can e.g. connect to [The Things Network](https://www.thethingsnetwork.org). Lora Credentials (such as ```APP_KEY```, ```APP_EUI``` and ```DEV_EUI``` - in case of LoRaWAN OTA Authentification) should be stored in an external ```privateConfig.h``` file in the base folder of the specific firmware (see [constDefine.h](https://github.com/voelkerb/PowerMeter/blob/master/Firmware/Version_2/constDefine.h) for more details).
 * ```APP_KEY```: Application key of OTA activation for TTN network.
 * ```DEV_EUI```: Device EUI for TTN network.
 * ```APP_EUI```: Application EUI of OTA activation for TTN network.
