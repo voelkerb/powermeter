@@ -280,6 +280,8 @@ void setup() {
   stpm_mutex = xSemaphoreCreateMutex();
   // Setup STPM 32
   success = stpm34.init();
+  stpm34._logFunc = &logFunc;
+
   stpm34.setCalibration(config.myConf.calV, config.myConf.calI);
   if (!success) logger.log(ERROR, "STPM Init Failed");
   successAll &= success;
@@ -307,7 +309,11 @@ void setup() {
   mqtt.onDisconnect = &onMQTTDisconnect;
   mqtt.onMessage = &mqttCallback;
 
-
+  // Init daily reset task handle
+  initDailyReset();
+  // Accumulation of energy
+  initEnergyHandler();
+  
   // Init send buffer
   snprintf((char *)&sendbuffer[0], SEND_BUF_SIZE, "%s", DATA_PREFIX);
 
@@ -368,14 +374,14 @@ void loraDownlink(const char * data, int port, int snr, int rssi) {
   uint8_t val[LORA_MSG_SIZE];
   // Parse hex string
   for (size_t count = 0; count < sizeof(val)/sizeof(*val); count++) {
-      sscanf(pos, "%2hhx", &val[count]);
-      pos += 2;
+    sscanf(pos, "%2hhx", &val[count]);
+    pos += 2;
   }
 
   logger.append("Decoded: [");
   for (size_t count = 0; count < sizeof(val)/sizeof(*val); count++) {
-      logger.append("0x");
-      logger.append("%02x, ", val[count]);
+    logger.append("0x");
+    logger.append("%02x, ", val[count]);
   }
   logger.append("]");
   logger.flushAppended();
@@ -388,7 +394,10 @@ void loraDownlink(const char * data, int port, int snr, int rssi) {
   else if (val[1] == 2) relay.set(!relay.state);
 
   // Check reset
-  if (val[2] == 1) ESP.restart();
+  if (val[2] == 1) {
+    storeEnergy(); 
+    ESP.restart();
+  }
 }
 #endif
 
@@ -420,8 +429,6 @@ void onIdleOrSampling() {
   // Handle tcp clients connections
   if (millis() - tcpUpdate > TCP_UPDATE_INTERVAL) {
     tcpUpdate = millis();
-  // if ((long)(millis() - tcpUpdate) >= 0) {
-    // tcpUpdate += TCP_UPDATE_INTERVAL;
     // Handle disconnect
     for (size_t i = 0; i < MAX_CLIENTS; i++) {
       if (clientConnected[i]) {
@@ -462,7 +469,7 @@ void onIdle() {
     //   mqttUpdate += MQTT_UPDATE_INTERVAL;
     //   // On long time no update, avoid multiupdate
     //   if ((long)(millis() - mqttUpdate) >= 0) mqttUpdate = millis() + MQTT_UPDATE_INTERVAL; 
-      sendStatusMQTT();
+      sendStatus(false, true);
     }
   }
 
@@ -480,13 +487,10 @@ void onIdle() {
   // update RTC regularly
   if (millis() - rtcUpdate > RTC_UPDATE_INTERVAL) {
     rtcUpdate = millis();
-  // if ((long)(millis() - rtcUpdate) >= 0) {
-  //   rtcUpdate += RTC_UPDATE_INTERVAL;
-  //   // On long time no update, avoid multiupdate
-  //   if ((long)(millis() - rtcUpdate) >= 0) rtcUpdate = millis() + RTC_UPDATE_INTERVAL; 
     if (rtc.connected) rtc.update();
   }
-    
+  
+  #ifdef LORA_WAN
   // Update LORA only on idle every second
   if (millis() - loraUpdate > LORA_UPDATE_INTERVAL) {
     loraUpdate = millis();
@@ -494,6 +498,7 @@ void onIdle() {
       sendStatusLoRa();
     }
   }
+  #endif
 
   // Update lifeness only on idle every second
   if (millis() - lifenessUpdate > LIFENESS_UPDATE_INTERVAL) {
@@ -502,7 +507,11 @@ void onIdle() {
   //   lifenessUpdate += LIFENESS_UPDATE_INTERVAL;
   //   // On long time no update, avoid multiupdate
   //   if ((long)(millis() - lifenessUpdate) >= 0) lifenessUpdate = millis() + LIFENESS_UPDATE_INTERVAL; 
+    #ifdef REPORT_ENERGY_ON_LIFENESS
+    sendStatus(true, false);
+    #else
     logger.log("");
+    #endif
   }
   
   /*
@@ -561,14 +570,13 @@ void sendStatusLoRa() {
   // TODO: Something is still wrong with voltage calculation
   values[3] = stpm34.readRMSVoltage(1)+230.0;
   // unit is watt hours and we want kwh
-  values[4] = stpm34.readActiveEnergy(1)/1000.0;
+  values[4] = (float)(config.myConf.energy + stpm34.readActiveEnergy(1))/1000.0;
   // Unlock stpm 
   xSemaphoreGive(stpm_mutex);
 
   uint32_t ts = myTime.timestamp().seconds;
   uint8_t rs = relay.state;
   
-  logger.log("Sizeof values: %li", sizeof(values));
   char * head = command;
   head += snprintf(head, COMMAND_MAX_SIZE, "AT+CMSGHEX=\"%s", lora.toHexStr((uint8_t*)&values[0], sizeof(values)));
   head += snprintf(head, COMMAND_MAX_SIZE - strlen(command), "%s", lora.toHexStr((uint8_t*)&ts, sizeof(ts)));
@@ -581,7 +589,7 @@ void sendStatusLoRa() {
 /****************************************************
  * Send Status info over mqtt 
  ****************************************************/
-void sendStatusMQTT() {
+void sendStatus(bool viaLogger, bool viaMQTT) {
   JsonObject obj = docSend.to<JsonObject>();
   obj.clear();
   float value = 0.0;
@@ -602,11 +610,11 @@ void sendStatusMQTT() {
     docSend["current"] = value;
   }
   // unit is watt hours and we want kwh
-  value = round2<float>(stpm34.readActiveEnergy(1)/1000.0);
+  value = round2<float>(float(config.myConf.energy + stpm34.readActiveEnergy(1))/1000.0);
+  // value = round2<float>(float(config.myConf.energy + stpm34.readActiveEnergy(1)));
   docSend["energy"] = value;
   // TODO: Something is still wrong with voltage calculation
   value = round2<float>(stpm34.readRMSVoltage(1)+230.0);
-
   // Unlock stpm 
   xSemaphoreGive(stpm_mutex);
 
@@ -614,8 +622,8 @@ void sendStatusMQTT() {
   docSend["ts"] = myTime.timestamp().seconds;
   response = "";
   serializeJson(docSend, response);
-  // logger.log("MQTT msg: %s", response.c_str());
-  mqtt.publish(mqttTopicPubSample, response.c_str());
+  if (viaLogger) logger.log("%s", response.c_str());
+  if (viaMQTT) mqtt.publish(mqttTopicPubSample, response.c_str());
 }
 
 
@@ -642,10 +650,15 @@ void sendDeviceInfo(Stream * sender) {
   docSend["buffer_size"] = ringBuffer.getSize();
   docSend["psram"] = ringBuffer.inPSRAM();
   docSend["rtc"] = rtc.connected;
-  docSend["calV"] = config.myConf.calV;
-  docSend["calI"] = config.myConf.calI;
   docSend["state"] = state != SampleState::IDLE ? "busy" : "idle";
   docSend["relay"] = relay.state;
+  docSend["energy"] = config.myConf.energy;
+  if (config.myConf.resetHour < 0) {
+    snprintf(command, COMMAND_MAX_SIZE, "None");
+  } else {
+    snprintf(command, COMMAND_MAX_SIZE, "@%02i:%02i:00", config.myConf.resetHour, config.myConf.resetMinute);
+  }
+  docSend["dailyReset"] = command;
   JsonArray array = docSend.createNestedArray("calibration");
   array.add(config.myConf.calV);
   array.add(config.myConf.calI);
@@ -1599,6 +1612,81 @@ void initMDNS() {
   MDNS.addService("_elec", "_tcp", STANDARD_TCP_STREAM_PORT);
 }
 
+
+void storeEnergy() {
+  xSemaphoreTake(stpm_mutex, portMAX_DELAY);
+  double energy = stpm34.readActiveEnergy(1);
+  xSemaphoreGive(stpm_mutex);
+  // logger.log("Updating total energy: %.2fWh + %.2fWh", config.myConf.energy, energy);
+  config.setEnergy(config.myConf.energy + energy);
+  // Reset energy in class
+  stpm34.ph1Energy.active = 0.0;
+}
+/****************************************************
+ * Update energy handler
+ ****************************************************/
+TaskHandle_t updateEnergyTask = NULL;
+void updateEnergy(void * pvParameters) {
+  while (not updating) {
+    if (state == SampleState::IDLE) storeEnergy();
+    vTaskDelay(ENERGY_UPDATE_INTERVAL);
+  }
+  vTaskDelete(updateEnergyTask); // destroy this task 
+}
+
+/****************************************************
+ * Init update energy handler
+ ****************************************************/
+void initEnergyHandler() {
+  if (updateEnergyTask == NULL) {
+    xTaskCreate(
+          updateEnergy,   /* Function to implement the task */
+          "updateEnergy", /* Name of the task */
+          8000,      /* Stack size in words */
+          NULL,       /* Task input parameter */
+          1,          /* Priority of the task */
+          &updateEnergyTask);  /* Task handle */
+  }
+}
+
+/****************************************************
+ * Check daily reset time each minute
+ ****************************************************/
+TaskHandle_t dailyResetTask = NULL;
+void checkDailyReset(void * pvParameters) {
+  while (not updating) {
+    // Wait at least till the beginning of the next minute
+    // If time not valid yet, it will wait 60s
+    vTaskDelay((60-myTime.second()+1)*1000);
+    // logger.log("Checking daily restart!");
+    if (myTime.valid() and myTime.hour() == config.myConf.resetHour) {
+      if (myTime.minute() == config.myConf.resetMinute) {
+        if (updating) continue; // Prevent restart on update
+        storeEnergy();
+        logger.log("Daily restart now!");
+        delay(1000); // So that log message is send out.
+        ESP.restart();
+      }
+    }
+  }
+  vTaskDelete(dailyResetTask); // destroy this task 
+}
+
+/****************************************************
+ * Init daily reset
+ ****************************************************/
+void initDailyReset() {
+  if (dailyResetTask == NULL) {
+    xTaskCreate(
+          checkDailyReset,   /* Function to implement the task */
+          "checkDailyReset", /* Name of the task */
+          8000,      /* Stack size in words */
+          NULL,       /* Task input parameter */
+          1,          /* Priority of the task */
+          &dailyResetTask);  /* Task handle */
+  }
+}
+
 /****************************************************
  * Check streamserver connection, since connect is 
  * a blocking task, we make it nonblocking using 
@@ -1806,6 +1894,7 @@ void setupOTA() {
   // ArduinoOTA.setPasswordHash(2"21232f297a57a5a743894a0e4a801fc3");
 
   ArduinoOTA.onStart([]() {
+    storeEnergy();
     updating = true;
     Network::allowNetworkChange = false;
     logger.log("Start updating");
