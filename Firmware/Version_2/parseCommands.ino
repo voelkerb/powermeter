@@ -423,6 +423,7 @@ void handleJSON() {
   /*********************** RESTART COMMAND ****************************/
   // e.g. {"cmd":"restart"}
   else if (strcmp(cmd, CMD_RESTART) == 0) {
+    storeEnergy();
     ESP.restart();
   }
 
@@ -746,6 +747,19 @@ void handleJSON() {
       docSend["state"] = "busy";
     }
   }
+  /*********************** Reset energy COMMAND ****************************/
+  // e.g. {"cmd":"clearLog"}
+  else if (strcmp(cmd, CMD_RESET_ENERGY) == 0) {
+    if (state == SampleState::IDLE) {
+      stpm34.resetEnergies();
+      config.setEnergy(0);
+      docSend["error"] = false;
+    } else {
+      setBusyResponse();
+      docSend["msg"] = response;
+      docSend["state"] = "busy";
+    }
+  }
 
   /*********************** Clear Log COMMAND ****************************/
   // e.g. {"cmd":"clearLog"}
@@ -780,11 +794,45 @@ void handleJSON() {
       docSend["state"] = "busy";
     }
   }
+
+  /*********************** Daily restart COMMAND ****************************/
+  // e.g. {"cmd":"dailyRestart","hour":0,"minute":0}
+  else if (strcmp(cmd, CMD_DAILY_RESTART) == 0) {
+    if (state == SampleState::IDLE) {
+      docSend["error"] = true;
+      JsonVariant hour_variant = root["hour"];
+      JsonVariant minute_variant = root["minute"];
+      if (hour_variant.isNull() or minute_variant.isNull() ) {
+        docSend["msg"] = "Missing hour/minute";
+        return;
+      }
+      int hour = root["hour"];
+      if (hour < -1 || hour >= 24) {
+        docSend["msg"] = "Hour must be in 24h format, -1 to disable";
+        return;
+      }
+      int minute = root["minute"];
+      if (minute < -1 || minute >= 60) {
+        docSend["msg"] = "Minute must be -1<min<60, -1 to disable";
+        return;
+      }
+      docSend["error"] = false;
+      config.myConf.resetHour = hour;
+      config.myConf.resetMinute = minute;
+      if (config.myConf.resetHour < 0)  snprintf(command, COMMAND_MAX_SIZE, "Disabled daily restart");
+      else snprintf(command, COMMAND_MAX_SIZE, "Set daily restart to: %02i:%02i:00", hour, minute);
+      docSend["msg"] = command;
+      config.store();
+    } else {
+      setBusyResponse();
+      docSend["msg"] = response;
+      docSend["state"] = "busy";
+    }
+  }
   #ifdef LORA_WAN
   /*********************** LORA COMMAND ****************************/
   // e.g. {"cmd":"getLog"}
   else if (strcmp(cmd, CMD_LORA) == 0) {
-
     JsonVariant msg_Variant = root["msg"];
     if (msg_Variant.isNull()) {
       docSend["msg"] = "Missing lora msg";
@@ -935,18 +983,19 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
     if(strcmp(command, "v") == 0) {
       value = stpm34.readFundamentalVoltage(1);
       snprintf(unit, MAX_UNIT_STR_LENGTH, "V");
-    }
-    else if(strcmp(command, "i") == 0) {
+    } else if(strcmp(command, "i") == 0) {
       value = stpm34.readRMSCurrent(1);
       snprintf(unit, MAX_UNIT_STR_LENGTH, "mA");
-    }
-    else if(strcmp(command, "q") == 0) {
+    } else if(strcmp(command, "q") == 0) {
       value = stpm34.readReactivePower(1);
       snprintf(unit, MAX_UNIT_STR_LENGTH, "var");
-    }
-    else if(strcmp(command, "s") == 0) {
+    } else if(strcmp(command, "s") == 0) {
       value = stpm34.readApparentRMSPower(1);
       snprintf(unit, MAX_UNIT_STR_LENGTH, "VA");
+    // default is active power
+    } else if(strcmp(command, "e") == 0) {
+      value = (float)(config.myConf.energy + stpm34.readActiveEnergy(1))/1000.0;
+      snprintf(unit, MAX_UNIT_STR_LENGTH, "kWh");
     // default is active power
     } else {
       value = stpm34.readActivePower(1);
