@@ -9,6 +9,7 @@
 
 // #define DEBUG_DEEP
 #define SENT_LIFENESS_TO_CLIENTS
+#define REPORT_ENERGY_ON_LIFENESS
 
 #define SEND_INFO_ON_CLIENT_CONNECT
 
@@ -17,9 +18,9 @@
 #define SERIAL_SPEED 115200
 
 #define USE_SERIAL
-// #define SERIAL_LOGGER
+#define SERIAL_LOGGER
 // #define CMD_OVER_SERIAL
-#define LORA_WAN
+// #define LORA_WAN
 
 #if defined(SERIAL_LOGGER) && !defined(USE_SERIAL)
 #error CONFIG ERROR: cannot use seriallog without serial (USE_SERIAL defined) 
@@ -54,6 +55,7 @@
 #define STREAM_SERVER_UPDATE_INTERVAL 30000
 #define MQTT_UPDATE_INTERVAL 5000
 #define LORA_UPDATE_INTERVAL 20000
+#define ENERGY_UPDATE_INTERVAL 30000
 
 // We allow a max of 3 tcp clients for performance reasons
 #define MAX_CLIENTS 3
@@ -116,6 +118,7 @@ const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define CMD_SWITCH "switch"
 #define CMD_STOP "stop"
 #define CMD_RESTART "restart"
+#define CMD_DAILY_RESTART "dailyRestart"
 #define CMD_FACTORY_RESET "factoryReset"
 #define CMD_BASIC_RESET "basicReset"
 #define CMD_INFO "info"
