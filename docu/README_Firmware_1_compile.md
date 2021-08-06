@@ -1,4 +1,4 @@
-[powermeter]: (https://github.com/voelkerb/powermeter)
+[PowerMeter]: (https://github.com/voelkerb/PowerMeter)
 
 # How to compile firmware version 1
 
@@ -15,15 +15,15 @@
 
 ## Upload using USB
 
-* Plug the [powermeter] into a socket, as it is requires for power supply 
-* Connect the [powermeter] over micro USB to you PC. The USB connection is galvanically isolated - so do not panick.
+* Plug the [PowerMeter] into a socket, as it is requires for power supply 
+* Connect the [PowerMeter] over micro USB to you PC. The USB connection is galvanically isolated - so do not panick.
 * Select no more than 2Mbauds
 * Press _Compile and Upload_
 
 ## Upload using Arduino-OTA
 
-* Select the [powermeter] you want to upload to from the avaialble network ports
-* If the corresponding [powermeter] is not shown, make sure you are in the same network or try to reset the [powermeter] (unplug it from the socket and plug it back in).
+* Select the [PowerMeter] you want to upload to from the avaialble network ports
+* If the corresponding [PowerMeter] is not shown, make sure you are in the same network or try to reset the [PowerMeter] (unplug it from the socket and plug it back in).
 
     <img src="/docu/figures/NetworkPort.png" width="400">
 
@@ -42,20 +42,20 @@
 
 * Use the upload script
   ```bash
-  python3 upload.py powermeter <pathToElfOrBin> 
+  python3 upload.py PowerMeter <pathToElfOrBin> 
   ```
-  Select one or mulitple [powermeter] from the provided list
+  Select one or mulitple [PowerMeter] from the provided list
   ```
   Available Devices:
-  #  powermeter:              Device:                  IP:                      
-  0  powermeter0              powermeter0              192.168.0.145            
-  1  powermeter15             powermeter15             192.168.0.113            
-  2  powermeter20             powermeter20             192.168.0.111            
-  3  powermeter21             powermeter21             192.168.0.118            
-  4  powermeter24             powermeter24             192.168.0.115            
-  5  powermeter26             powermeter26             192.168.0.119            
-  6  powermeter27             powermeter27             192.168.0.138            
-  7  powermeter28             powermeter28             192.168.0.114            
+  #  PowerMeter:              Device:                  IP:                      
+  0  PowerMeter0              PowerMeter0              192.168.0.145            
+  1  PowerMeter15             PowerMeter15             192.168.0.113            
+  2  PowerMeter20             PowerMeter20             192.168.0.111            
+  3  PowerMeter21             PowerMeter21             192.168.0.118            
+  4  PowerMeter24             PowerMeter24             192.168.0.115            
+  5  PowerMeter26             PowerMeter26             192.168.0.119            
+  6  PowerMeter27             PowerMeter27             192.168.0.138            
+  7  PowerMeter28             PowerMeter28             192.168.0.114            
   Press ENTER to continue with all devices.
   Deselect specific devices e.g.: -2,-4,-7
   Select specific devices e.g.: 1,3,5,6

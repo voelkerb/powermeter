@@ -1,16 +1,17 @@
-[powermeter]: (https://github.com/voelkerb/powermeter)
+[PowerMeter]: (https://github.com/voelkerb/PowerMeter)
 
 # How to compile Firmware Version 2
 
 ## Preprocessor Settings
 
 Before you want to compile the code, make sure the preprocessor settings are as you want them to be.
-Take a look at [constDefine.h](https://github.com/voelkerb/powermeter/blob/master/Firmware/Version_2/constDefine.h).
+Take a look at [constDefine.h](https://github.com/voelkerb/PowerMeter/blob/master/Firmware/Version_2/constDefine.h).
 The PowerMeter supports multiple addons such as LoRa or an additional sensor board. Depending on your configuration, the preprocessor settings must be set correctly. 
 
 ### General Settings:
 
 * ```SENT_LIFENESS_TO_CLIENTS```: Uncomment to send lifeness messages with the current system time each second to connected TCP clients or over serial.
+* ```REPORT_ENERGY_ON_LIFENESS```: Uncomment to send energy info as lifeness messages.
 * ```LIFENESS_UPDATE_INTERVAL```: Interval for sending lifeness messages.
 * ```SEND_INFO_ON_CLIENT_CONNECT```: Uncomment to send system info JSON dictionary automatically on TCP client connect.
 * ```USE_SERIAL```: Comment to disable serial, uncomment if you want to use serial.
@@ -24,6 +25,7 @@ The PowerMeter supports multiple addons such as LoRa or an additional sensor boa
 * ```MDNS_UPDATE_INTERVAL```: Interval for MDNS updates.
 * ```TCP_UPDATE_INTERVAL```: Interval for adding TCP clients.
 * ```RTC_UPDATE_INTERVAL```: Interval for updating the RTC's time.
+* ```ENERGY_UPDATE_INTERVAL```: Interval energy is stored to flash. If no energy is reported, this is also the interval it is updated. As energy register overflows around each 19Wh, keep it smaller than ```t < 19Wh*3600s/MAX_POWER```. With a worst case ```MAX_POWER``` of ```3600W``` this results in around ```19s```. 
 * ```STREAM_SERVER_UPDATE_INTERVAL```: Interval for checking if an external TCP server is ready to receive data.
 * ```MQTT_UPDATE_INTERVAL```: Interval to send energy info over MQTT.
 * ```LOG_PREFIX```: Prefix for logs via TCP connection.
@@ -46,7 +48,7 @@ The PowerMeter supports multiple addons such as LoRa or an additional sensor boa
 
 ### LoRaWAN Settings:
 
-* ```LORA_WAN```: Comment to disable, uncomment to enable LoRaWAN connection via an extension board with AT command firmware (e.g. [Grove LoRa E5](https://wiki.seeedstudio.com/Grove_LoRa_E5_New_Version/)). Therewith you can e.g. connect to [The Things Network](https://www.thethingsnetwork.org). Lora Credentials (such as ```APP_KEY```, ```APP_EUI``` and ```DEV_EUI``` - in case of LoRaWAN OTA Authentification) should be stored in an external ```privateConfig.h``` file (see [constDefine.h](https://github.com/voelkerb/powermeter/blob/master/Firmware/Version_2/constDefine.h) for more details).
+* ```LORA_WAN```: Comment to disable, uncomment to enable LoRaWAN connection via an extension board with AT command firmware (e.g. [Grove LoRa E5](https://wiki.seeedstudio.com/Grove_LoRa_E5_New_Version/)). Therewith you can e.g. connect to [The Things Network](https://www.thethingsnetwork.org). Lora Credentials (such as ```APP_KEY```, ```APP_EUI``` and ```DEV_EUI``` - in case of LoRaWAN OTA Authentification) should be stored in an external ```privateConfig.h``` file (see [constDefine.h](https://github.com/voelkerb/PowerMeter/blob/master/Firmware/Version_2/constDefine.h) for more details).
 * ```APP_KEY```: Application key of OTA activation for TTN network.
 * ```DEV_EUI```: Device EUI for TTN network.
 * ```APP_EUI```: Application EUI of OTA activation for TTN network.
@@ -68,7 +70,7 @@ The PowerMeter supports multiple addons such as LoRa or an additional sensor boa
 
 ## Upload using an FTDI
 
-* Connect the [powermeter] to an FTDI according to the following wiring: 
+* Connect the [PowerMeter] to an FTDI according to the following wiring: 
 
   <img src="/docu/figures/Connections.png" width="600">
 
@@ -77,8 +79,8 @@ The PowerMeter supports multiple addons such as LoRa or an additional sensor boa
 
 ## Upload using Arduino-OTA
 
-* Select the [powermeter] you want to upload to from the available network ports
-* If the corresponding [powermeter] is not shown, make sure you are in the same network or try to reset the [powermeter] (unplug it from the socket and plug it back in).
+* Select the [PowerMeter] you want to upload to from the available network ports
+* If the corresponding [PowerMeter] is not shown, make sure you are in the same network or try to reset the [PowerMeter] (unplug it from the socket and plug it back in).
 
     <img src="/docu/figures/NetworkPort.png" width="400">
 
@@ -97,20 +99,20 @@ The PowerMeter supports multiple addons such as LoRa or an additional sensor boa
 
 * Use the upload script
   ```bash
-  python3 upload.py powermeter <pathToElfOrBin> 
+  python3 upload.py PowerMeter <pathToElfOrBin> 
   ```
-  Select one or mulitple [powermeter] from the provided list
+  Select one or mulitple [PowerMeter] from the provided list
   ```
   Available Devices:
-  #  powermeter:              Device:                  IP:                      
-  0  powermeter0              powermeter0              192.168.0.145            
-  1  powermeter15             powermeter15             192.168.0.113            
-  2  powermeter20             powermeter20             192.168.0.111            
-  3  powermeter21             powermeter21             192.168.0.118            
-  4  powermeter24             powermeter24             192.168.0.115            
-  5  powermeter26             powermeter26             192.168.0.119            
-  6  powermeter27             powermeter27             192.168.0.138            
-  7  powermeter28             powermeter28             192.168.0.114            
+  #  PowerMeter:              Device:                  IP:                      
+  0  PowerMeter0              PowerMeter0              192.168.0.145            
+  1  PowerMeter15             PowerMeter15             192.168.0.113            
+  2  PowerMeter20             PowerMeter20             192.168.0.111            
+  3  PowerMeter21             PowerMeter21             192.168.0.118            
+  4  PowerMeter24             PowerMeter24             192.168.0.115            
+  5  PowerMeter26             PowerMeter26             192.168.0.119            
+  6  PowerMeter27             PowerMeter27             192.168.0.138            
+  7  PowerMeter28             PowerMeter28             192.168.0.114            
   Press ENTER to continue with all devices.
   Deselect specific devices e.g.: -2,-4,-7
   Select specific devices e.g.: 1,3,5,6
