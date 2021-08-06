@@ -1,27 +1,35 @@
 [submodule "Firmware/Version_2/src/mqtt"]
 	path = Firmware/Version_2/src/mqtt
 	url = https://github.com/voelkerb/ESP.simpleMQTT
+	update = merge
 [submodule "Firmware/Version_2/src/multiLogger"]
 	path = Firmware/Version_2/src/multiLogger
 	url = https://github.com/voelkerb/ESP.multiLogger
+	update = merge
 [submodule "Firmware/Version_2/src/network"]
 	path = Firmware/Version_2/src/network
 	url = https://github.com/voelkerb/ESP.unifiedNetwork
+	update = merge
 [submodule "Firmware/Version_2/src/relay"]
 	path = Firmware/Version_2/src/relay
 	url = https://github.com/voelkerb/bistableRelay
+	update = merge
 [submodule "Firmware/Version_2/src/ringbuffer"]
 	path = Firmware/Version_2/src/ringbuffer
 	url = https://github.com/voelkerb/ringBuffer
+	update = merge
 [submodule "Firmware/Version_2/src/DS3231_RTC"]
 	path = Firmware/Version_2/src/DS3231_RTC
 	url = https://github.com/voelkerb/ESP.DS3231_RTC
+	update = merge
 [submodule "Firmware/Version_2/src/time"]
 	path = Firmware/Version_2/src/time
 	url = https://github.com/voelkerb/ESP.timeHandling
+	update = merge
 [submodule "Firmware/Version_2/src/stpm3x"]
 	path = Firmware/Version_2/src/stpm3x
 	url = https://github.com/voelkerb/STPM3X
+	update = merge
 [submodule "Firmware/Version_1/src/DS3231_RTC"]
 	path = Firmware/Version_1/src/DS3231_RTC
 	url = https://github.com/voelkerb/ESP.DS3231_RTC
@@ -49,3 +57,4 @@
 [submodule "Firmware/Version_2/src/LoRaWAN_AT"]
 	path = Firmware/Version_2/src/LoRaWAN_AT
 	url = git@github.com:voelkerb/LoRaWAN_AT.git
+	update = merge
