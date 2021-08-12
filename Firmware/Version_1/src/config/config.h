@@ -22,29 +22,40 @@
 // Include for network config
 #include "../network/src/network.h"
 
+// Define standard wifis settings such as in the following example
+// In external privateConfig.h. It will be included automatically (see config.cpp) 
+// #define NUM_STANDARD_WIFIS 2
+// const char * MY_STANDARD_WIFIS[] = {
+//     "SSID1",  "PWD1",
+//     "SSID2",  "PWD2"
+// };
+
+
 // If you cahange any of these values, the config on all devices will be bricked
-#define MAX_WIFI_APS 4
 #define MAX_STRING_LEN 25
 #define MAX_IP_LEN 17
 #define MAX_DNS_LEN 25
 #define MAX_NAME_LEN MAX_STRING_LEN
-#define MAX_SSID_LEN MAX_STRING_LEN
-#define MAX_PWD_LEN MAX_STRING_LEN
 
 #define NAME_START_ADDRESS 0
-#define WIFI_START_ADDRESS NAME_START_ADDRESS+MAX_NAME_LEN+1
-#define MQTT_START_ADDRESS WIFI_START_ADDRESS+MAX_WIFI_APS*(MAX_SSID_LEN+MAX_PWD_LEN+2)
-#define RELAY_STATE_START_ADDRESS MQTT_START_ADDRESS+MAX_IP_LEN+1
-#define STREAM_SERVER_ADDRESS RELAY_STATE_START_ADDRESS+1
-#define TIME_SERVER_ADDRESS STREAM_SERVER_ADDRESS+MAX_IP_LEN+1
-
-#define CALIBRATION_V_START_ADDRESS TIME_SERVER_ADDRESS+MAX_DNS_LEN+1
-#define CALIBRATION_I_START_ADDRESS CALIBRATION_V_START_ADDRESS+sizeof(float)
-
-// Add configs here
-#define EEPROM_SIZE CALIBRATION_I_START_ADDRESS+sizeof(float)+2
+#define EEPROM_SIZE sizeof(NetworkConf)+sizeof(MeterConfiguration)+2
 
 #define NO_SERVER "-"
+
+// packed required to store in EEEPROM efficiently
+struct __attribute__((__packed__)) MeterConfiguration {
+  //NOTE: Relay state must be first in configuration
+  bool relayState = false;                  // State of the relay
+  double energy = 0.0;                      // amount of energy consumed (Wh)
+  float calI = 1.0f;                        // Calibration parameter for current
+  float calV = 1.0f;                        // Calibration parameter for voltage
+  char mqttServer[MAX_DNS_LEN] = {'\0'};    // MQTT Server DNS name
+  char streamServer[MAX_DNS_LEN] = {'\0'};  // Stream Server DNS name
+  char timeServer[MAX_DNS_LEN] = {'\0'};    // Time Server DNS name
+  int8_t resetHour = -1;                    // Perform reliability reset (hour)
+  int8_t resetMinute = -1;                  // Perform reliability reset (minute) -1 to disable
+}; 
+
 class Configuration {
   public:
     Configuration();
@@ -64,23 +75,14 @@ class Configuration {
     void setTimeServerAddress(char * serverAddress);
     bool getRelayState();
     void setRelayState(bool value);
+    void setEnergy(double energy);
     void setCalibration(float valueV, float valueI);
 
     NetworkConf netConf;
-    char mqttServer[MAX_IP_LEN];
-    char streamServer[MAX_IP_LEN];
-    char timeServer[MAX_DNS_LEN];
-
-    float calV;
-    float calI;
-    float calP;
+    MeterConfiguration myConf;
 
   private:
-
-    bool storeString(unsigned int address, char * str);
-    bool loadString(unsigned int address, char * str, unsigned int max_len);
-    bool loadBool(unsigned int address, char * str, unsigned int max_len);
-    bool relayState;
+    void storeMyConf();
 };
 
 #endif
