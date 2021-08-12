@@ -4,12 +4,12 @@
 
 ## The Basics
 The [PowerMeter] has to be connected to an outlet for power supply. \
-At first boot, the [PowerMeter] will open a WiFi-Network called "PowerMeterX".\
+At first boot, the [PowerMeter] will open a WiFi-Network called "powermeterX".\
 It is not password protected, so you can simply connect to it. 
-Open a TCP connection to IP ```PowerMeterX.local``` (or ```192.168.4.1```) at port ```54321```.
+Open a TCP connection to IP ```powermeterX.local``` (or ```192.168.4.1```) at port ```54321```.
 This will show you basic information of the [PowerMeter] as a JSON encoded messages.
 ```bash
-Info:{"cmd":"info","type":"PowerMeter","version":"2.2","compiled":"Mar_2_2021_09:57:58","sys_time":"03/02/2021 10:37:07.662","name":"PowerMeterX","ip":"192.168.4.1","mqtt_server":"-","stream_server":"-","time_server":"time.google.com","sampling_rate":4000,"buffer_size":3670016,"psram":true,"rtc":false,"calV":1,"calI":1,"state":"idle","relay":1,"calibration":[1,1],"ssids":"[energywifi]","ssid":"-","rssi":-71,"bssid":"-"}
+Info:{"cmd":"info","type":"PowerMeter","version":"2.2","compiled":"Mar_2_2021_09:57:58","sys_time":"03/02/2021 10:37:07.662","name":"powermeterX","ip":"192.168.4.1","mqtt_server":"-","stream_server":"-","time_server":"time.google.com","sampling_rate":4000,"buffer_size":3670016,"psram":true,"rtc":false,"calV":1,"calI":1,"state":"idle","relay":1,"calibration":[1,1],"ssids":"[energywifi]","ssid":"-","rssi":-71,"bssid":"-"}
 ```
 You will further notice that a lifeness log messages is sent each second.
 We will further see how to use commands to interface with a PowerMeter.
@@ -61,8 +61,8 @@ This command should be used to give the [PowerMeter] a new unique name.
 It will be used to announce presence over MDNS and if no known network is found, an AP is opened using this name.
 
 ```bash
-Info:[I]03/02 10:42:24: MDNS Name: PowerMeterX
-Info:{"error":false,"msg":"Set MDNS name to: PowerMeterX","mdns_name":"PowerMeterX"}
+Info:[I]03/02 10:42:24: MDNS Name: powermeterX
+Info:{"error":false,"msg":"Set MDNS name to: powermeterX","mdns_name":"powermeterX"}
 ```
 
 ## Relay
@@ -82,12 +82,14 @@ You can also trigger the module to automatically reset at a particular time (```
 ## Reset
 ```{"cmd":"factoryReset"}```\
 Resets everything to defaults. The default values are:
-- name: _PowerMeterX_
-- wifi aps: _energywifi_ -> (pwd: _silkykayak943_)
+- name: _powermeterX_
+- wifi aps: <StandardSSID> -> (pwd: <StandardPWD>)
 - timeserver: _time.google.com_
 - streamserver: -
 - mqtt broker: -
 - _calV_ = _calI_ = 1.0
+- _energy_ = 0
+- _resetHour_ = _resetMinute_ = -1
 
 If you want to reset everything except the name, use: ```{"cmd":"basicReset"}```
 
@@ -141,8 +143,8 @@ To set the MQTT server, use the command: ```{"cmd":"mqttServer", "payload":{"ser
 Currently, only the MQTT standard server port ```1883``` is supported. 
 ```bash
 Info:[I]03/02 11:38:42: MQTT connected to 192.168.0.13
-Info:[I]03/02 11:38:42: Subscribing to: PowerMeter/+
-Info:[I]03/02 11:38:42: Subscribing to: PowerMeter/PowerMeterX/+
+Info:[I]03/02 11:38:42: Subscribing to: powermeter/+
+Info:[I]03/02 11:38:42: Subscribing to: powermeter/powermeterX/+
 Info:{"error":false,"msg":"Set MQTTServer address to: 192.168.0.13","mqtt_server":"192.168.0.13"}
 ```
 
@@ -150,48 +152,48 @@ NOTE: In sampling mode, MQTT is disabled for performance reason.
 
 
 ### Receiving MQTT messages
-The relay state is send as a retained message on topic ```PowerMeter/<name>/state/switch```
+The relay state is send as a retained message on topic ```powermeter/<name>/state/switch```
 ```bash
-PowerMeter/PowerMeterX/state/switch true
+powermeter/powermeterX/state/switch true
 ```
 Each 5 seconds, information about the power consumption is sent.
 It contains the _active power_ in _Watt_, the _RMS voltage_ in _V_,  the _RMS current in _A_, the current timestamp, and the accumulated energy since last restart. Furthermore, if more than _2 Watt_ is drawn, ```inUse``` is ```true```.
 ```bash
-PowerMeter/PowerMeter15/state/sample {"power":1116.89,"inUse":true,"current":4.82,"energy":0,"volt":236.56,"ts":"1614681575"}
-PowerMeter/PowerMeter28/state/sample {"power":0.01,"inUse":false,"current":0,"energy":0,"volt":230.85,"ts":"1614681576"}
-PowerMeter/PowerMeter27/state/sample {"power":0,"current":0,"inUse":false,"energy":0,"volt":231.28,"ts":"1614681576"}
+powermeter/powermeter15/state/sample {"power":1116.89,"inUse":true,"current":4.82,"energy":0,"volt":236.56,"ts":"1614681575"}
+powermeter/powermeter28/state/sample {"power":0.01,"inUse":false,"current":0,"energy":0,"volt":230.85,"ts":"1614681576"}
+powermeter/powermeter27/state/sample {"power":0,"current":0,"inUse":false,"energy":0,"volt":231.28,"ts":"1614681576"}
 ```
 
 ### Sending MQTT messages
 Mqtt can also be used to send any command. Special topics are used to switch the relay or to get basic electricity related measurements, but any of the available commands can be sent.
-* Switching the relay using topic ```PowerMeter/<name>/switch```:
+* Switching the relay using topic ```powermeter/<name>/switch```:
   ```bash
-  mosquitto_pub -h 192.168.0.13 -t 'PowerMeter/PowerMeter27/switch' -m true
+  mosquitto_pub -h 192.168.0.13 -t 'powermeter/powermeter27/switch' -m true
   ```
-* Sample a single value using topic ```PowerMeter/<name>/sample``` and message one of ```v,i,p,q,s,e``` (_RMS voltage_,_RMS Current_, _active_, _reactive_, _apparent power_ or _active energy_). On no, or any other message, the _active power_ is sent.
+* Sample a single value using topic ```powermeter/<name>/sample``` and message one of ```v,i,p,q,s,e``` (_RMS voltage_,_RMS Current_, _active_, _reactive_, _apparent power_ or _active energy_). On no, or any other message, the _active power_ is sent.
   ```bash
-  PowerMeter/PowerMeter27/sample p
+  powermeter/powermeter27/sample p
   ````
   The response contains a JSON dictionary with the key _value_, _unit_ and _ts_, example:
   ```bash
-  PowerMeter/PowerMeter27/state/sample {"value":1.003773,"unit":"W","ts":"03/02/2021 11:59:59.034"}
+  powermeter/powermeter27/state/sample {"value":1.003773,"unit":"W","ts":"03/02/2021 11:59:59.034"}
   ```
-* You can also send any command, which can be sent over a bare TCP connection using topic ```PowerMeter/<name>/cmd```
+* You can also send any command, which can be sent over a bare TCP connection using topic ```powermeter/<name>/cmd```
   ```bash
-  mosquitto_pub -h 192.168.0.13 -t 'PowerMeter/PowerMeter27/cmd' -m '{"cmd":"switch","payload":{"value":"false"}}'
+  mosquitto_pub -h 192.168.0.13 -t 'powermeter/powermeter27/cmd' -m '{"cmd":"switch","payload":{"value":"false"}}'
   ````
 * If you have multiple PowerMeters and want to send the message to all at the same time (e.g. to change some global settings such as the MQTT broker), you can simple ditch the specific PowerMeter name and all will answer. 
   ```bash
-  PowerMeter/sample p
-  PowerMeter/PowerMeter24/state/sample {"value":1.487539,"unit":"W","ts":"03/02/2021 12:08:28.208"}
-  PowerMeter/PowerMeter28/state/sample {"value":0.039796,"unit":"W","ts":"03/02/2021 12:08:28.210"}
-  PowerMeter/PowerMeter20/state/sample {"value":193.0246,"unit":"W","ts":"03/02/2021 12:08:28.208"}
-  PowerMeter/PowerMeter26/state/sample {"value":15.28467,"unit":"W","ts":"03/02/2021 12:08:28.209"}
+  powermeter/sample p
+  powermeter/powermeter24/state/sample {"value":1.487539,"unit":"W","ts":"03/02/2021 12:08:28.208"}
+  powermeter/powermeter28/state/sample {"value":0.039796,"unit":"W","ts":"03/02/2021 12:08:28.210"}
+  powermeter/powermeter20/state/sample {"value":193.0246,"unit":"W","ts":"03/02/2021 12:08:28.208"}
+  powermeter/powermeter26/state/sample {"value":15.28467,"unit":"W","ts":"03/02/2021 12:08:28.209"}
   ...
   ```
 
 ## LoRaWAN
-If a supported module is connected to the expansion header and the Firmware is configured to make use of it (see [compile info](https://github.com/voelkerb/PowerMeter/blob/master/docu/README_Firmware_2_compile.md)), data is also sent via LoRaWAN.
+If a supported module is connected to the expansion header and the Firmware is configured to make use of it (see [compile info](https://github.com/voelkerb/powermeter/blob/master/docu/README_Firmware_2_compile.md)), data is also sent via LoRaWAN.
 
 Credentials for OTA activation must be set at compile time. We may add this to the configuration later on.
 
@@ -382,7 +384,6 @@ Send this command to stop sampling or streaming. As a response, you get informat
 ```bash
 Info:{"msg":"Received stop command","sample_duration":16157,"samples":16,"sent_samples":16,"start_ts":"1614697441.119","stop_ts":"1614697457.276","ip":"192.168.0.138","avg_rate":0.955618,"cmd":"stop"}
 ```
-
 
 ## Misc
 ### Availability
