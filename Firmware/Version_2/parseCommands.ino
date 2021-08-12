@@ -599,11 +599,11 @@ void handleJSON() {
         return;
       }
       int success = 0;
-      if (strlen(newSSID) < MAX_SSID_LEN and strlen(newPWD) < MAX_PWD_LEN) {
+      if (strlen(newSSID) < MAX_NETWORK_LEN and strlen(newPWD) < MAX_PWD_LEN) {
         success = config.addWiFi((char * )newSSID, (char * )newPWD);
       } else {
         response = F("SSID or PWD too long, max: ");
-        response += MAX_SSID_LEN;
+        response += MAX_NETWORK_LEN;
         response += F(", ");
         response += MAX_PWD_LEN;
         docSend["msg"] = response;
@@ -654,11 +654,11 @@ void handleJSON() {
         return;
       }
       bool success = false;
-      if (strlen(newSSID) < MAX_SSID_LEN) {
+      if (strlen(newSSID) < MAX_NETWORK_LEN) {
         success = config.removeWiFi((char * )newSSID);
       } else {
         response = F("SSID too long, max: ");
-        response += MAX_SSID_LEN;
+        response += MAX_NETWORK_LEN;
         docSend["msg"] = response;
         return;
       }
@@ -754,6 +754,8 @@ void handleJSON() {
       stpm34.resetEnergies();
       config.setEnergy(0);
       docSend["error"] = false;
+      response = "Energy reset!";
+      docSend["msg"] = response;
     } else {
       setBusyResponse();
       docSend["msg"] = response;
