@@ -431,11 +431,9 @@ void onIdleOrSampling() {
     tcpUpdate = millis();
     // Handle disconnect
     for (size_t i = 0; i < MAX_CLIENTS; i++) {
-      if (clientConnected[i]) {
-        if (!client[i].connected()) {
-          onClientDisconnect(client[i], i);
-          clientConnected[i] = false;
-        } 
+      if (clientConnected[i] and !client[i].connected()) {
+        onClientDisconnect(client[i], i);
+        clientConnected[i] = false;
       }
     }
 
@@ -465,10 +463,6 @@ void onIdle() {
   if (mqtt.connected()) {
     if (millis() - mqttUpdate > MQTT_UPDATE_INTERVAL) {
       mqttUpdate = millis();
-    // if ((long)(millis() - mqttUpdate) >= 0) {
-    //   mqttUpdate += MQTT_UPDATE_INTERVAL;
-    //   // On long time no update, avoid multiupdate
-    //   if ((long)(millis() - mqttUpdate) >= 0) mqttUpdate = millis() + MQTT_UPDATE_INTERVAL; 
       sendStatus(false, true);
     }
   }
@@ -503,10 +497,6 @@ void onIdle() {
   // Update lifeness only on idle every second
   if (millis() - lifenessUpdate > LIFENESS_UPDATE_INTERVAL) {
     lifenessUpdate = millis();
-  // if ((long)(millis() - lifenessUpdate) >= 0) {
-  //   lifenessUpdate += LIFENESS_UPDATE_INTERVAL;
-  //   // On long time no update, avoid multiupdate
-  //   if ((long)(millis() - lifenessUpdate) >= 0) lifenessUpdate = millis() + LIFENESS_UPDATE_INTERVAL; 
     #ifdef REPORT_ENERGY_ON_LIFENESS
     sendStatus(true, false);
     #else
@@ -910,7 +900,6 @@ void onWifiConnect() {
     // The stuff todo if we have a network connection (and hopefully internet as well)
     // myTime.updateNTPTime(true); TODO: This breaks everything with the first 5 powermeters 8-13 WTF
     myTime.updateNTPTime();
-    mqttUpdate = millis() + MQTT_UPDATE_INTERVAL;
     if (!mqtt.connect()) logger.log(ERROR, "Cannot connect to MQTT Server %s", mqtt.ip);
   } else {
     logger.log(ALL, "Network AP Opened");
@@ -1073,15 +1062,6 @@ void writeData(Stream &getter, uint16_t size) {
   // long sendDone = micros();
   if (sent > start) sentSamples += (sent-start)/streamConfig.measurementBytes;
   // long allDone = micros();
-}
-
-void test(bool tail) {
-  if (ringBuffer.available() > streamConfig.samplingRate*streamConfig.measurementBytes) {
-    ringBuffer.reset();
-    packetNumber++;
-    size_t test = snprintf((char*)&sendbuffer[0], SEND_BUF_SIZE, "Test: %s - %lu\r\n", timeStr(), packetNumber);
-    sendStream->write((uint8_t*)&sendbuffer[0], test);
-  }
 }
 
 /****************************************************
@@ -1612,7 +1592,6 @@ void initMDNS() {
   MDNS.addService("_elec", "_tcp", STANDARD_TCP_STREAM_PORT);
 }
 
-
 void storeEnergy() {
   xSemaphoreTake(stpm_mutex, portMAX_DELAY);
   double energy = stpm34.readActiveEnergy(1);
@@ -1787,8 +1766,9 @@ void printInfoString() {
     logger.log("No RTC");
   }
   logger.append("Known Networks: [");
-  for (size_t i = 0; i < config.netConf.numAPs; i++) {
-    logger.append("%s%s", config.netConf.SSIDs[i], i < config.netConf.numAPs-1?", ":"");
+  for (size_t i = 0; i < max((int)config.netConf.numAPs, MAX_WIFI_APS); i++) {
+    snprintf(command, MAX_NETWORK_LEN, "%s", config.netConf.SSIDs[i]);
+    logger.append("%s%s", command, i < config.netConf.numAPs-1?", ":"");
   }
   logger.flushAppended();
 }
@@ -1902,22 +1882,6 @@ void setupOTA() {
     if (state != SampleState::IDLE) {
       logger.log(WARNING, "Stop Sampling, Update Requested");
       stopSampling();
-
-      // // Write remaining chunks with tailr
-      // if (outputWriter != NULL) outputWriter(true);
-      // docSend["msg"] = F("Received stop command");
-      // docSend["sample_duration"] = samplingDuration;
-      // docSend["samples"] = totalSamples;
-      // docSend["sent_samples"] = sentSamples;
-      // docSend["start_ts"] = myTime.timestampStr(streamConfig.startTs);
-      // docSend["stop_ts"] = myTime.timestampStr(streamConfig.stopTs);
-      // docSend["ip"] = WiFi.localIP().toString();
-      // docSend["avg_rate"] = totalSamples/(samplingDuration/1000.0);
-      // docSend["cmd"] = CMD_STOP;
-
-      // serializeJson(docSend, response);
-      // response = LOG_PREFIX + response;
-      // if (sendStream) sendStream->println(response);
     }
 
     // Disconnecting all connected clients
