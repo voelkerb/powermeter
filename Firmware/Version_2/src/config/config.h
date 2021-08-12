@@ -32,31 +32,15 @@
 
 
 // If you cahange any of these values, the config on all devices will be bricked
-#define MAX_WIFI_APS 4
 #define MAX_STRING_LEN 25
 #define MAX_IP_LEN 17
 #define MAX_DNS_LEN 25
 #define MAX_NAME_LEN MAX_STRING_LEN
-#define MAX_SSID_LEN MAX_STRING_LEN
-#define MAX_PWD_LEN MAX_STRING_LEN
 
 #define NAME_START_ADDRESS 0
-// #define WIFI_START_ADDRESS NAME_START_ADDRESS+MAX_NAME_LEN+1
-// #define MQTT_START_ADDRESS WIFI_START_ADDRESS+MAX_WIFI_APS*(MAX_SSID_LEN+MAX_PWD_LEN+2)
-// #define RELAY_STATE_START_ADDRESS MQTT_START_ADDRESS+MAX_DNS_LEN+1
-// #define STREAM_SERVER_ADDRESS RELAY_STATE_START_ADDRESS+1
-// #define TIME_SERVER_ADDRESS STREAM_SERVER_ADDRESS+MAX_DNS_LEN+1
-
-// #define CALIBRATION_V_START_ADDRESS TIME_SERVER_ADDRESS+MAX_DNS_LEN+1
-// #define CALIBRATION_I_START_ADDRESS CALIBRATION_V_START_ADDRESS+sizeof(float)
-
-// Add configs here
-// #define EEPROM_SIZE CALIBRATION_I_START_ADDRESS+sizeof(float)+2
 #define EEPROM_SIZE sizeof(NetworkConf)+sizeof(MeterConfiguration)+2
 
 #define NO_SERVER "-"
- 
-#define MAX_LOADER_SIZE 5
 
 // packed required to store in EEEPROM efficiently
 struct __attribute__((__packed__)) MeterConfiguration {
