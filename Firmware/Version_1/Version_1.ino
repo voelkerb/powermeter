@@ -56,7 +56,7 @@ Configuration config;
 // This version does not support an rtc
 // Rtc rtc(RTC_INT);
 DST germany{ true, 7, 3, 25, 7, 10, 25, 3600};
-TimeHandler myTime(config.timeServer, LOCATION_TIME_OFFSET, NULL, &ntpSynced, germany, &logger);
+TimeHandler myTime(config.myConf.timeServer, LOCATION_TIME_OFFSET, NULL, &ntpSynced, germany, &logger);
 
 // STPM Object
 STPM stpm34(STPM_RES, STPM_CS, STPM_SYN);
@@ -158,6 +158,7 @@ volatile unsigned long totalSamples = 0;
 long lifenessUpdate = millis();
 long mdnsUpdate = millis();
 long tcpUpdate = millis();
+long energyUpdate = millis();
 long rtcUpdate = millis();
 long mqttUpdate = millis();
 long streamServerUpdate = millis();
@@ -251,7 +252,7 @@ void setup() {
 
   // Setup STPM 32
   success = stpm34.init();
-  stpm34.setCalibration(config.calV, config.calI);
+  stpm34.setCalibration(config.myConf.calV, config.myConf.calI);
   if (!success) logger.log(ERROR, "STPM Init Failed");
   successAll &= success;
 
@@ -266,7 +267,7 @@ void setup() {
   response.reserve(2*COMMAND_MAX_SIZE);
 
   // Set mqtt and callbacks
-  mqtt.init(config.mqttServer, config.netConf.name);
+  mqtt.init(config.myConf.mqttServer, config.netConf.name);
   mqtt.onConnect = &onMQTTConnect;
   mqtt.onDisconnect = &onMQTTDisconnect;
   mqtt.onMessage = &mqttCallback;
@@ -320,17 +321,38 @@ void loop() {
   yield();
 }
 
+void logFunc(const char * log, ...) {
+  va_list args;
+  va_start(args, log);
+  vsnprintf(command, COMMAND_MAX_SIZE, log, args);
+  va_end(args);
+  logger.log(command);
+}
+
 void onIdleOrSampling() {
-
-  // MQTT loop
-  mqtt.update();
-
   // Handle serial requests
   #ifdef CMD_OVER_SERIAL
   if (Serial.available()) {
     handleEvent(&Serial);
   }
   #endif
+
+  // MQTT loop
+  mqtt.update();
+  if (myTime.valid() and myTime.hour() == config.myConf.resetHour) {
+    if (myTime.minute() == config.myConf.resetMinute) {
+      storeEnergy();
+      logger.log("Daily restart now!");
+      delay(1000); // So that log message is send out.
+      ESP.restart();
+    }
+  }
+
+  // Handle tcp clients connections
+  if (millis() - energyUpdate > ENERGY_UPDATE_INTERVAL) {
+    energyUpdate = millis();
+    storeEnergy();
+  }
 
   // Handle tcp requests
   for (size_t i = 0; i < MAX_CLIENTS; i++) {
@@ -339,25 +361,15 @@ void onIdleOrSampling() {
     }
   }
 
+
   // Handle tcp clients connections
-  if ((long)(millis() - tcpUpdate) >= 0) {
-    tcpUpdate += TCP_UPDATE_INTERVAL;
+  if (millis() - tcpUpdate > TCP_UPDATE_INTERVAL) {
+    tcpUpdate = millis();
     // Handle disconnect
     for (size_t i = 0; i < MAX_CLIENTS; i++) {
-      if (clientConnected[i]) {
-        if (!client[i].connected()) {
-          logger.log(WARNING, "client %s not connected for %is", client[i].remoteIP().toString().c_str(), clientConnectionLossCnt[i]);
-          // client[i].connected() may fire even if connected, therefore we use this dirty hack
-          // Only if multiple times disconnect seen, actually disconnect it.
-          // NOTE: What happens on client write in this case?
-          if (clientConnectionLossCnt[i] >= MAX_CNT_BEFORE_DISCONNECT) {
-            onClientDisconnect(client[i], i);
-            clientConnected[i] = false;
-          }
-          clientConnectionLossCnt[i]++;
-        } else {
-          clientConnectionLossCnt[i] = 0;
-        }
+      if (clientConnected[i] and !client[i].connected()) {
+        onClientDisconnect(client[i], i);
+        clientConnected[i] = false;
       }
     }
 
@@ -368,6 +380,7 @@ void onIdleOrSampling() {
     }
   }
 }
+
 
 /****************************************************
  * Things todo regularly if we are not sampling
@@ -380,39 +393,30 @@ void onIdle() {
 
   // Update stuff over mqtt
   if (mqtt.connected()) {
-    if ((long)(millis() - mqttUpdate) >= 0) {
-      mqttUpdate += MQTT_UPDATE_INTERVAL;
-      // On long time no update, avoid multiupdate
-      if ((long)(millis() - mqttUpdate) >= 0) mqttUpdate = millis() + MQTT_UPDATE_INTERVAL; 
-      sendStatusMQTT();
+    if (millis() - mqttUpdate > MQTT_UPDATE_INTERVAL) {
+      mqttUpdate = millis();
+      sendStatus(false, true);
     }
   }
 
   // Re-advertise MDNS service service every 30s 
   // TODO: no clue why, but does not work properly for esp32 (maybe it is the mac side)
-  if ((long)(millis() - mdnsUpdate) >= 0) {
-    mdnsUpdate += MDNS_UPDATE_INTERVAL;
+  if (millis() - mdnsUpdate > MDNS_UPDATE_INTERVAL) {
+    mdnsUpdate = millis();
     // On long time no update, avoid multiupdate
-    if ((long)(millis() - mdnsUpdate) >= 0) mdnsUpdate = millis() + MDNS_UPDATE_INTERVAL; 
       // initMDNS();
       // Not required, only for esp8266
     //MDNS.addService("_elec", "_tcp", STANDARD_TCP_STREAM_PORT);
   }
-  
-  // // update RTC regularly
-  // if ((long)(millis() - rtcUpdate) >= 0) {
-  //   rtcUpdate += RTC_UPDATE_INTERVAL;
-  //   // On long time no update, avoid multiupdate
-  //   if ((long)(millis() - rtcUpdate) >= 0) rtcUpdate = millis() + RTC_UPDATE_INTERVAL; 
-  //   if (rtc.connected) rtc.update();
-  // }
     
   // Update lifeness only on idle every second
-  if ((long)(millis() - lifenessUpdate) >= 0) {
-    lifenessUpdate += LIFENESS_UPDATE_INTERVAL;
-    // On long time no update, avoid multiupdate
-    if ((long)(millis() - lifenessUpdate) >= 0) lifenessUpdate = millis() + LIFENESS_UPDATE_INTERVAL; 
+  if (millis() - lifenessUpdate > LIFENESS_UPDATE_INTERVAL) {
+    lifenessUpdate = millis();
+    #ifdef REPORT_ENERGY_ON_LIFENESS
+    sendStatus(true, false);
+    #else
     logger.log("");
+    #endif
   }
   
   /*
@@ -466,7 +470,7 @@ void onIdle() {
 /****************************************************
  * Send Status info over mqtt 
  ****************************************************/
-void sendStatusMQTT() {
+void sendStatus(bool viaLogger, bool viaMQTT) {
   JsonObject obj = docSend.to<JsonObject>();
   obj.clear();
   float value = 0.0;
@@ -485,17 +489,18 @@ void sendStatusMQTT() {
     docSend["current"] = value;
   }
   // unit is watt hours and we want kwh
-  value = round2<float>(stpm34.readActiveEnergy(1)/1000.0);
+  value = round2<float>(float(config.myConf.energy + stpm34.readActiveEnergy(1))/1000.0);
+  // value = round2<float>(float(config.myConf.energy + stpm34.readActiveEnergy(1)));
   docSend["energy"] = value;
   // TODO: Something is still wrong with voltage calculation
   value = round2<float>(stpm34.readRMSVoltage(1)+230.0);
 
   docSend["volt"] = value;
-  docSend["ts"] = myTime.timestampStr(true);
+  docSend["ts"] = myTime.timestamp().seconds;
   response = "";
   serializeJson(docSend, response);
-  // logger.log("MQTT msg: %s", response.c_str());
-  mqtt.publish(mqttTopicPubSample, response.c_str());
+  if (viaLogger) logger.log("%s", response.c_str());
+  if (viaMQTT) mqtt.publish(mqttTopicPubSample, response.c_str());
 }
 
 
@@ -515,20 +520,25 @@ void sendDeviceInfo(Stream * sender) {
   docSend["sys_time"] = myTime.timeStr();
   docSend["name"] = config.netConf.name;
   docSend["ip"] = Network::localIP().toString();
-  docSend["mqtt_server"] = config.mqttServer;
-  docSend["stream_server"] = config.streamServer;
-  docSend["time_server"] = config.timeServer;
+  docSend["mqtt_server"] = config.myConf.mqttServer;
+  docSend["stream_server"] = config.myConf.streamServer;
+  docSend["time_server"] = config.myConf.timeServer;
   docSend["sampling_rate"] = streamConfig.samplingRate;
   docSend["buffer_size"] = ringBuffer.getSize();
-  docSend["psram"] = false;
-  docSend["rtc"] = false;
-  docSend["calV"] = config.calV;
-  docSend["calI"] = config.calI;
+  // docSend["psram"] = ringBuffer.inPSRAM();
+  // docSend["rtc"] = rtc.connected;
   docSend["state"] = state != SampleState::IDLE ? "busy" : "idle";
   docSend["relay"] = relay.state;
+  docSend["energy"] = config.myConf.energy;
+  if (config.myConf.resetHour < 0) {
+    snprintf(command, COMMAND_MAX_SIZE, "None");
+  } else {
+    snprintf(command, COMMAND_MAX_SIZE, "@%02i:%02i:00", config.myConf.resetHour, config.myConf.resetMinute);
+  }
+  docSend["dailyReset"] = command;
   JsonArray array = docSend.createNestedArray("calibration");
-  array.add(config.calV);
-  array.add(config.calI);
+  array.add(config.myConf.calV);
+  array.add(config.myConf.calI);
 
   String ssids = "[";
   for (size_t i = 0; i < config.netConf.numAPs; i++) {
@@ -542,7 +552,6 @@ void sendDeviceInfo(Stream * sender) {
     docSend["rssi"] = WiFi.RSSI();
     docSend["bssid"] = Network::getBSSID();
   }
-  WiFi.RSSI();
   response = "";
   serializeJson(docSend, response);
   response = LOG_PREFIX + response;
@@ -1076,6 +1085,14 @@ void ICACHE_RAM_ATTR sample_ISR(){
   sei();
 }
 
+void storeEnergy() {
+  double energy = stpm34.readActiveEnergy(1);
+  // logger.log("Updating total energy: %.2fWh + %.2fWh", config.myConf.energy, energy);
+  config.setEnergy(config.myConf.energy + energy);
+  // Reset energy in class
+  stpm34.ph1Energy.active = 0.0;
+}
+
 /****************************************************
  * Init the MDNs name from eeprom, only the number ist
  * stored in the eeprom, construct using prefix.
@@ -1100,19 +1117,18 @@ void initMDNS() {
  ****************************************************/
 bool first = true;
 void handleStreamServer() {
-  if (strcmp(config.streamServer, NO_SERVER) != 0 and !exStreamServer.connected()) {
-    // logger.log("Try to connect Stream Server: %s", config.streamServer);
+  if (strcmp(config.myConf.streamServer, NO_SERVER) != 0 and !exStreamServer.connected()) {
     // Handle reconnects
     if (!exStreamServer.connected()                         // If not already connected
       and state == SampleState::IDLE                      // and in idle mode
       and Network::connected and not Network::apMode      // Network is STA mode
-      and strcmp(config.streamServer, NO_SERVER) != 0) {  // and server is set
-      if (exStreamServer.connect(config.streamServer, STANDARD_TCP_STREAM_PORT)) {
-        logger.log("Connected to StreamServer: %s", config.streamServer);
+      and strcmp(config.myConf.streamServer, NO_SERVER) != 0) {  // and server is set
+      if (exStreamServer.connect(config.myConf.streamServer, STANDARD_TCP_STREAM_PORT)) {
+        logger.log("Connected to StreamServer: %s", config.myConf.streamServer);
         onClientConnect(exStreamServer);
       } else {
         if (first) {
-          logger.log(WARNING, "Cannot connect to StreamServer: %s", config.streamServer);
+          logger.log(WARNING, "Cannot connect to StreamServer: %s", config.myConf.streamServer);
           first = false;
         }
       }

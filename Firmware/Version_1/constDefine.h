@@ -7,9 +7,11 @@
 #define SENT_LIFENESS_TO_CLIENTS
 
 
-#define VERSION "1.2"
+#define VERSION "1.3"
 
 #define SEND_INFO_ON_CLIENT_CONNECT
+#define SENT_LIFENESS_TO_CLIENTS
+#define REPORT_ENERGY_ON_LIFENESS
 // TODO:
 #define USE_SERIAL
 // #define CMD_OVER_SERIAL
@@ -35,6 +37,7 @@
 #define LIFENESS_UPDATE_INTERVAL 1000
 #define RTC_UPDATE_INTERVAL 30000
 #define STREAM_SERVER_UPDATE_INTERVAL 30000
+#define ENERGY_UPDATE_INTERVAL 30000
 #define MQTT_UPDATE_INTERVAL 5000
 
 #define MAX_CNT_BEFORE_DISCONNECT 3
@@ -99,6 +102,7 @@ const int PS_BUF_SIZE = 1*1024;
 #define CMD_SWITCH "switch"
 #define CMD_STOP "stop"
 #define CMD_RESTART "restart"
+#define CMD_DAILY_RESTART "dailyRestart"
 #define CMD_FACTORY_RESET "factoryReset"
 #define CMD_BASIC_RESET "basicReset"
 #define CMD_INFO "info"
@@ -106,13 +110,14 @@ const int PS_BUF_SIZE = 1*1024;
 #define CMD_NTP "ntp"
 #define CMD_ADD_WIFI "addWifi"
 #define CMD_REMOVE_WIFI "delWifi"
+#define CMD_RESET_ENERGY "resetEnergy"
 #define CMD_CLEAR_LOG "clearLog"
 #define CMD_GET_LOG "getLog"
 #define CMD_MQTT_SERVER "mqttServer"
 #define CMD_STREAM_SERVER "streamServer"
 #define CMD_TIME_SERVER "timeServer"
 #define CMD_LOG_LEVEL "log"
-#define CMD_LOG_CALIBRATION "calibration"
+#define CMD_CALIBRATION "calibration"
 
 
 #define LOG_LEVEL_ALL "all"
