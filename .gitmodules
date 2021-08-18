@@ -58,3 +58,6 @@
 	path = Firmware/Version_2/src/LoRaWAN_AT
 	url = git@github.com:voelkerb/LoRaWAN_AT.git
 	update = merge
+[submodule "ext/sensorBoard"]
+	path = ext/sensorBoard
+	url = git@github.com:voelkerb/powermeter.sensorboard.git
