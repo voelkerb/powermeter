@@ -9,27 +9,52 @@
 
 // #define DEBUG_DEEP
 #define SENT_LIFENESS_TO_CLIENTS
-#define REPORT_ENERGY_ON_LIFENESS
+#define REPORT_VALUES_ON_LIFENESS
 
 #define SEND_INFO_ON_CLIENT_CONNECT
 
 // Serial Speed and DEBUG option
 // #define SERIAL_SPEED 9600
-#define SERIAL_SPEED 115200
+// #define SERIAL_SPEED 115200  // For use with LORA WAN
+#define SERIAL_SPEED 38400 // For use with sensor board
 
 #define USE_SERIAL
-#define SERIAL_LOGGER
+// #define SERIAL_LOGGER
 // #define CMD_OVER_SERIAL
 // #define LORA_WAN
+#define SENSOR_BOARD
+#define LATCH_SENSOR_VALUES
+
+// Check for invalid configurations
+#if defined(SENSOR_BOARD) 
+#if !defined(USE_SERIAL)
+#error CONFIG ERROR: cannot use sensor board without serial (USE_SERIAL defined) 
+#endif
+#if defined(LORA_WAN)
+#error CONFIG ERROR: cannot use SENSOR BOARD and LORA WAN module
+#endif
+#if defined(SERIAL_LOGGER)
+#error CONFIG ERROR: cannot use SENSOR BOARD and serial logger
+#endif
+#if SERIAL_SPEED != 38400
+#error CONFIG ERROR: Sensor board uses 38400 baud
+#endif
+#endif
+
+#if defined(LORA_WAN)
+#if !defined(USE_SERIAL)
+#error CONFIG ERROR: cannot use LORA WAN module without serial (USE_SERIAL defined) 
+#endif
+#if defined(SERIAL_LOGGER)
+#error CONFIG ERROR: cannot use LORA WAN module and serial logger
+#endif
+#if SERIAL_SPEED != 115200
+#error CONFIG ERROR: LoRaWAN Module uses 115200 baud (9600 factory default)
+#endif
+#endif
 
 #if defined(SERIAL_LOGGER) && !defined(USE_SERIAL)
 #error CONFIG ERROR: cannot use seriallog without serial (USE_SERIAL defined) 
-#endif
-#if defined(LORA_WAN) && !defined(USE_SERIAL)
-#error CONFIG ERROR: cannot use LORA WAN module without serial (USE_SERIAL defined) 
-#endif
-#if defined(LORA_WAN) && defined(SERIAL_LOGGER)
-#error CONFIG ERROR: cannot use LORA WAN module and serial logger
 #endif
 
 // Default values
@@ -56,6 +81,7 @@
 #define MQTT_UPDATE_INTERVAL 5000
 #define ENERGY_UPDATE_INTERVAL 19000
 #define LORA_UPDATE_INTERVAL 20000
+#define SENSOR_UPDATE_INTERVALL 5000
 
 // We allow a max of 3 tcp clients for performance reasons
 #define MAX_CLIENTS 3
@@ -136,6 +162,21 @@ const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define CMD_CALIBRATION "calibration"
 #define CMD_LORA "lora"
 
+#ifdef SENSOR_BOARD
+#define CMD_GET_PIR "getPIR"
+#define CMD_GET_TEMP "getTemp"
+#define CMD_GET_HUM "getHum"
+#define CMD_GET_LIGHT "getLight"
+#define CMD_GET_SENSORS "getSensors"
+#define CMD_SET_LED "setLED"
+
+// Communication with SENSOR BOARD
+#define CMD_PIR "PIR"
+#define CMD_TEMP "Temp"	
+#define CMD_HUM "Hum"
+#define CMD_LIGHT "Light"
+#define CMD_SENSORS "Sensors"
+#endif
 
 
 #define LOG_LEVEL_ALL "all"

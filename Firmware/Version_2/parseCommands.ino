@@ -79,6 +79,7 @@ void handleJSON() {
   // {"cmd":"commandName", "payload":{<possible data>}}
   // e.g. mdns
 
+  docSend["error"] = true;
   const char* cmd = docRcv["cmd"];
   JsonObject root = docRcv.as<JsonObject>();
   if (cmd == nullptr) {
@@ -102,7 +103,6 @@ void handleJSON() {
       JsonVariant slotVariant = root["payload"]["slot"];
       int ntpConfidence = docRcv["payload"]["ntpConf"].as<int>();
 
-      docSend["error"] = true;
       if (typeC == nullptr or rate == 0) {
         response = "Not a valid \"sample\" command";
         if (typeC == nullptr) response += ", \"type\" missing";
@@ -297,21 +297,141 @@ void handleJSON() {
   // {"cmd":"switch", "payload":{"value":"true"}}
   else if (strcmp(cmd, CMD_SWITCH) == 0) {
     // For switching we need value payload
-    docSend["error"] = true;
     JsonVariant payloadValue = root["payload"]["value"];
     if (payloadValue.isNull()) {
-      docSend["error"] = false;
-      docSend["msg"] = F("Info:Not a valid \"switch\" command");
+      docSend["msg"] = F("Not a valid \"switch\" command");
       return;
     }
-    bool value = docRcv["payload"]["value"].as<bool>();
+     // On = 1 , Off = 1, Toogle = -1
+    int value = docRcv["payload"]["value"].as<int>();
     docSend["msg"]["switch"] = value;
-    response = F("Switching: ");
-    response += value ? F("On") : F("Off");
-    docSend["msg"] = response;
+    response = "Switching: ";
     docSend["error"] = false;
+    docSend["msg"] = response;
+    if (value == 1) response += F("On");
+    else if (value == 0) response += F("Off");
+    else if (value == -1) {	
+      response += relay.state ? F("On") : F("Off");
+      value = !relay.state;
+    }
     relay.set(value);
   }
+
+#ifdef SENSOR_BOARD
+  /*********************** getTemp COMMAND ****************************/
+  // {"cmd": "getTemp"}
+  else if(strcmp(cmd, CMD_GET_TEMP) == 0) {
+    docSend["error"] = false;
+    docSend["cmd"] = "temp";
+    #ifdef LATCH_SENSOR_VALUES
+    docSend["error"] = sensorBoard.updateTemp(true);
+    #endif
+    docSend["value"] = sensorBoard.temperature;
+  }
+  /*********************** getHum COMMAND ****************************/
+  // {"cmd": "getHum"}
+  else if(strcmp(cmd, CMD_GET_HUM) == 0) {
+    docSend["error"] = false;
+    docSend["cmd"]= "hum";
+    #ifdef LATCH_SENSOR_VALUES
+    docSend["error"] = sensorBoard.updateHum(true);
+    #endif
+    docSend["value"] =  (float) sensorBoard.humidity;
+  }
+  /*********************** getPIR COMMAND ****************************/
+  // {"cmd": "getPIR"}
+  else if(strcmp(cmd, CMD_GET_PIR) == 0) {
+    docSend["error"] = false;
+    docSend["cmd"]= "PIR";
+    #ifdef LATCH_SENSOR_VALUES
+    docSend["error"] = sensorBoard.updatePIR(true);
+    #endif
+    docSend["value"] = sensorBoard.PIR;
+  }
+  /*********************** getLight COMMAND ****************************/
+  // {"cmd": "getLight"}
+  else if(strcmp(cmd, CMD_GET_LIGHT) == 0) {
+    docSend["error"] = false;
+    docSend["cmd"]= "light";
+    #ifdef LATCH_SENSOR_VALUES
+    docSend["error"] = sensorBoard.updateLight(true);
+    #endif
+    docSend["value"] = sensorBoard.light;
+  }
+  /*********************** geAll Sensors COMMAND ****************************/
+  // {"cmd": "getLight"}
+  else if(strcmp(cmd, CMD_GET_SENSORS) == 0) {
+    docSend["error"] = false;
+    docSend["cmd"]= "sensors";
+    #ifdef LATCH_SENSOR_VALUES
+    docSend["error"] = sensorBoard.update(true);
+    #endif
+    docSend["temp"] = sensorBoard.temperature;
+    docSend["hum"] = sensorBoard.humidity;
+    docSend["light"] = sensorBoard.light;
+    docSend["PIR"] = sensorBoard.PIR;
+  }
+  /*********************** setLED COMMAND ****************************/
+  // {"cmd": "setLED",["mode":"power"],["brightness":<0-100.0>],"LED<0-3>":[<value_red>,<value_green>,<value_blue>]}}
+  else if(strcmp(cmd, CMD_SET_LED) == 0) {
+    bool set = false;
+    const char * mode = root["mode"];
+    JsonVariant brightness = root["brightness"];
+    // automatic mode
+    if (mode) {
+      if(strcmp(mode, "power") == 0) {
+        // Force power update
+        sensorUpdate = millis()-SENSOR_UPDATE_INTERVALL;
+        sensorBoard.ledMode = LED_MODE::POWER;
+        set = true;
+      }
+    }
+    // Set brightness 0-100
+    if (!brightness.isNull()) {
+      set = true;
+      float brightness = root["brightness"].as<float>();
+      sensorBoard.setBrightness(brightness);
+    }
+    // Manual mode
+    char name[5] = {'\0'};
+    // Loop over possible LED<X> settings
+    for (int i = 0; i < 4; i++) {
+      snprintf(name, 5, "LED%i", i);
+      if (i==0) snprintf(name, 5, "LED");
+      JsonVariant LED_Variant = root[name];
+      // Not inside
+      if (LED_Variant.isNull()) continue;
+      JsonArray led = root[name].as<JsonArray>();
+      if (led.size() != 3) {
+        docSend["msg"] = F("Not a valid \"setLED\" command");
+        return;
+      }
+      sensorBoard.ledMode = LED_MODE::MANUAL;
+      // For color R/G/B
+      for (int j = 0; j < 3; j++) {
+        // set all leds
+        if (i == 0) {
+          sensorBoard.LED[0][j] = led[j].as<uint8_t>();
+          sensorBoard.LED[1][j] = led[j].as<uint8_t>();
+          sensorBoard.LED[2][j] = led[j].as<uint8_t>();
+        // Set just the led i
+        } else {
+          sensorBoard.LED[i-1][j] = led[j].as<uint8_t>();
+        }
+      }
+      set = true;
+    }
+
+    if (!set) {
+      docSend["msg"] = F("Not a valid \"setLED\" command");
+      return;
+    }
+    sensorBoard.updateLEDs();
+    docSend["error"] = false;
+  }
+#endif
+
+
   /*********************** FlowControl COMMAND ****************************/
   // e.g. {"cmd":"cts","value":true}
   else if (strcmp(cmd, CMD_FLOW) == 0) {
@@ -372,7 +492,6 @@ void handleJSON() {
 
   /*********************** LOG LEVEL COMMAND ****************************/
   else if (strcmp(cmd, CMD_LOG_LEVEL) == 0) {
-    docSend["error"] = true;
     const char* level = root["level"];
     LogType newLogType = LogType::DEBUG;
     if (level == nullptr) {
@@ -456,7 +575,6 @@ void handleJSON() {
   // e.g. {"cmd":"mdns", "payload":{"name":"newName"}}
   else if (strcmp(cmd, CMD_MDNS) == 0) {
     if (state == SampleState::IDLE) {
-      docSend["error"] = true;
       const char* newName = docRcv["payload"]["name"];
       if (newName == nullptr) {
         docSend["msg"] = F("MDNS name required in payload with key name");
@@ -490,7 +608,6 @@ void handleJSON() {
   // e.g. {"cmd":"mqttServer", "payload":{"server":"<ServerAddress>"}}
   else if (strcmp(cmd, CMD_MQTT_SERVER) == 0) {
     if (state == SampleState::IDLE) {
-      docSend["error"] = true;
       const char* newServer = docRcv["payload"]["server"];
       if (newServer == nullptr) {
         docSend["msg"] = F("MQTTServer address required in payload with key server");
@@ -525,7 +642,6 @@ void handleJSON() {
   // e.g. {"cmd":"streamServer", "payload":{"server":"<ServerAddress>"}}
   else if (strcmp(cmd, CMD_STREAM_SERVER) == 0) {
     if (state == SampleState::IDLE) {
-      docSend["error"] = true;
       const char* newServer = docRcv["payload"]["server"];
       if (newServer == nullptr) {
         docSend["msg"] = F("StreamServer address required in payload with key server");
@@ -558,7 +674,6 @@ void handleJSON() {
   // e.g. {"cmd":"timeServer", "payload":{"server":"<ServerAddress>"}}
   else if (strcmp(cmd, CMD_TIME_SERVER) == 0) {
     if (state == SampleState::IDLE) {
-      docSend["error"] = true;
       const char* newServer = docRcv["payload"]["server"];
       if (newServer == nullptr) {
         docSend["msg"] = F("StreamServer address required in payload with key server");
@@ -591,7 +706,6 @@ void handleJSON() {
   // e.g. {"cmd":"addWifi", "payload":{"ssid":"ssidName","pwd":"pwdName"}}
   else if (strcmp(cmd, CMD_ADD_WIFI) == 0) {
     if (state == SampleState::IDLE) {
-      docSend["error"] = true;
       const char* newSSID = docRcv["payload"]["ssid"];
       const char* newPWD = docRcv["payload"]["pwd"];
       if (newSSID == nullptr or newPWD == nullptr) {
@@ -647,7 +761,6 @@ void handleJSON() {
   // e.g. {"cmd":"delWifi", "payload":{"ssid":"ssidName"}}
   else if (strcmp(cmd, CMD_REMOVE_WIFI) == 0) {
     if (state == SampleState::IDLE) {
-      docSend["error"] = true;
       const char* newSSID = docRcv["payload"]["ssid"];
       if (newSSID == nullptr) {
         docSend["msg"] = F("Required SSID to remove");
@@ -699,7 +812,6 @@ void handleJSON() {
       docSend["error"] = false;
     } else {
       docSend["msg"] = "Error syncing time";
-      docSend["error"] = true;
     }
     char * timeStr = myTime.timeStr();
     docSend["current_time"] = timeStr;
@@ -713,7 +825,6 @@ void handleJSON() {
       JsonVariant cal_I_Variant = root["calI"];
       if (cal_V_Variant.isNull() or cal_I_Variant.isNull()) {
         docSend["msg"] = "Missing calV AND calI constant";
-        docSend["error"] = true;
         return;
       }
       float valueV = docRcv["calV"].as<float>();
@@ -723,7 +834,6 @@ void handleJSON() {
         response +=  valueV;
         response += " not allowed [0.5-2.0]";
         docSend["msg"] = response;
-        docSend["error"] = true;
         return;
       }
       if (abs(valueI) > 2.0 or abs(valueI) < 0.5) {
@@ -731,7 +841,6 @@ void handleJSON() {
         response +=  valueI;
         response += " not allowed [0.5-2.0]";
         docSend["msg"] = response;
-        docSend["error"] = true;
         return;
       }
       config.setCalibration(valueV, valueI);
@@ -801,7 +910,6 @@ void handleJSON() {
   // e.g. {"cmd":"dailyRestart","hour":0,"minute":0}
   else if (strcmp(cmd, CMD_DAILY_RESTART) == 0) {
     if (state == SampleState::IDLE) {
-      docSend["error"] = true;
       JsonVariant hour_variant = root["hour"];
       JsonVariant minute_variant = root["minute"];
       if (hour_variant.isNull() or minute_variant.isNull() ) {
@@ -838,7 +946,6 @@ void handleJSON() {
     JsonVariant msg_Variant = root["msg"];
     if (msg_Variant.isNull()) {
       docSend["msg"] = "Missing lora msg";
-      docSend["error"] = true;
       return;
     }
     docSend["error"] = false;

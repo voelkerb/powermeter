@@ -25,6 +25,7 @@
 #include "src/relay/src/relay.h"
 #include "src/network/src/network.h"
 #include "src/config/config.h"
+#include "src/sensorBoard/SensorBoard.h"
 #include "src/ringbuffer/src/ringbuffer.h"
 #include "src/mqtt/src/mqtt.h"
 #include "src/LoRaWAN_AT/src/LoRaWAN_AT.h"
@@ -33,6 +34,13 @@
 void IRAM_ATTR sample_ISR();
 void IRAM_ATTR sqwvTriggered(void* instance);
 void ntpSynced(unsigned int confidence);
+#ifdef SENSOR_BOARD
+void btnPressed();
+void newTempReading(float temp);
+void newHumReading(float humidity);
+void newPIRReading(bool PIR);
+void newLightReading(uint32_t light);
+#endif
 
 void logFunc(const char * log, ...);
 void loraDownlink(const char * data, int port, int snr, int rssi);
@@ -94,6 +102,12 @@ LoRaWAN_AT lora;
 
 // Define it before StreamType enum redefines it
 MQTT mqtt;
+
+
+#ifdef SENSOR_BOARD
+SensorBoard sensorBoard(&Serial);
+#endif
+
 
 struct StreamConfig {
   bool prefix = false;                      // Send data with "data:" prefix
@@ -160,8 +174,13 @@ uint32_t lifenessUpdate = millis();
 uint32_t mdnsUpdate = millis();
 uint32_t tcpUpdate = millis();
 uint32_t rtcUpdate = millis();
-uint32_t loraUpdate = millis();
 uint32_t mqttUpdate = millis();
+#ifdef LORA_WAN
+uint32_t loraUpdate = millis();
+#endif
+#ifdef SENSOR_BOARD
+uint32_t sensorUpdate = millis();
+#endif
 
 // HW Timer and mutex for sapmpling ISR
 hw_timer_t * timer = NULL;
@@ -286,6 +305,25 @@ void setup() {
   if (!success) logger.log(ERROR, "STPM Init Failed");
   successAll &= success;
   
+  #ifdef LORA_WAN
+  // Init lorawan module with configuration for ttn network
+  success = lora.init(&Serial, &logFunc, &loraDownlink);
+  lora.setOTAA((LoRaWANConfiguration){APP_EUI, DEV_EUI, APP_KEY, LORA_PORT});
+  successAll &= success;
+  #endif
+
+  #ifdef SENSOR_BOARD
+  // Look if sensor board is connected
+  success = sensorBoard.init();
+  // Setup callback functions
+  sensorBoard.PIRCB = &newPIRReading;
+  sensorBoard.tempCB = &newTempReading;
+  sensorBoard.humCB = &newHumReading;
+  sensorBoard.lightCB = &newLightReading;
+  sensorBoard.buttonCB = &btnPressed;
+  successAll &= success;
+  #endif
+
    // Indicate error if there is any
   digitalWrite(ERROR_LED, !successAll);
 
@@ -299,10 +337,6 @@ void setup() {
   // Resever enough bytes for large string
   response.reserve(2*COMMAND_MAX_SIZE);
 
-  #ifdef LORA_WAN
-  success = lora.init(&Serial, &logFunc, &loraDownlink);
-  lora.setOTAA((LoRaWANConfiguration){APP_EUI, DEV_EUI, APP_KEY, LORA_PORT});
-  #endif
   // Set mqtt and callbacks
   mqtt.init(config.myConf.mqttServer, config.netConf.name);
   mqtt.onConnect = &onMQTTConnect;
@@ -452,6 +486,24 @@ void onIdle() {
   // If we logged during sampling, we flush now
   spiffsLog.flush();
 
+  #ifdef SENSOR_BOARD
+  // Handle serial commands
+  if (Serial.available()) sensorBoard.handle();
+  // New data request to the sensor board
+  if (millis() - sensorUpdate > SENSOR_UPDATE_INTERVALL) {
+    sensorUpdate = millis();
+    if (sensorBoard.ledMode == LED_MODE::POWER) {
+      xSemaphoreTake(stpm_mutex, portMAX_DELAY);
+      float power = stpm34.readActivePower(1);
+      xSemaphoreGive(stpm_mutex);
+      sensorBoard.powerToLEDs(power);
+      sensorBoard.updateLEDs();
+    }
+    // Update all sensor values
+    if (sensorBoard.active) sensorBoard.update();
+  }
+  #endif
+
   #ifdef LORA_WAN
   // LORA Loop
   lora.update();
@@ -469,13 +521,10 @@ void onIdle() {
 
   // Re-advertise MDNS service service every 30s 
   // TODO: no clue why, but does not work properly for esp32 (maybe it is the mac side)
-  // if ((long)(millis() - mdnsUpdate) >= 0) {
-  //   mdnsUpdate += MDNS_UPDATE_INTERVAL;
-  //   // On long time no update, avoid multiupdate
-  //   if ((long)(millis() - mdnsUpdate) >= 0) mdnsUpdate = millis() + MDNS_UPDATE_INTERVAL; 
+  // if (millis() - mdnsUpdate > MDNS_UPDATE_INTERVAL) {
+  //   mdnsUpdate = millis();
   //     // initMDNS();
   //     // Not required, only for esp8266
-  //   //MDNS.addService("_elec", "_tcp", STANDARD_TCP_STREAM_PORT);
   // }
   
   // update RTC regularly
@@ -497,7 +546,7 @@ void onIdle() {
   // Update lifeness only on idle every second
   if (millis() - lifenessUpdate > LIFENESS_UPDATE_INTERVAL) {
     lifenessUpdate = millis();
-    #ifdef REPORT_ENERGY_ON_LIFENESS
+    #ifdef REPORT_VALUES_ON_LIFENESS
     sendStatus(true, false);
     #else
     logger.log("");
@@ -665,6 +714,12 @@ void sendDeviceInfo(Stream * sender) {
     docSend["rssi"] = WiFi.RSSI();
     docSend["bssid"] = Network::getBSSID();
   }
+  #ifdef LORA_WAN
+  docSend["lora"] = lora.joined;
+  #endif
+  #ifdef SENSOR_BOARD
+  docSend["sensors"] = sensorBoard.active;
+  #endif
   response = "";
   serializeJson(docSend, response);
   response = LOG_PREFIX + response;
@@ -1009,23 +1064,19 @@ void writeChunksUDP(bool tail) {
 
 /****************************************************
  * Write data to mqtt sink, this requires special
- * formatiing of the data
+ * formating of the data
  ****************************************************/
 void writeDataMQTT(bool tail) {
   if(ringBuffer.available() < streamConfig.measurementBytes) return;
 
   // May be the most inefficient way to do it 
   // TODO: Improve this
-
   while(ringBuffer.available() >= streamConfig.measurementBytes) {
-
     JsonObject objSample = docSample.to<JsonObject>();
     objSample.clear();
     objSample["unit"] = unitStr;
     objSample["ts"] = myTime.timestamp().seconds;
     ringBuffer.read((uint8_t*)&values[0], streamConfig.measurementBytes);
-    // JsonArray array = docSend["values"].to<JsonArray>();
-    // for (int i = 0; i < streamConfig.numValues; i++) objSample["values"][i] = values[i];
     JsonArray array = docSend.createNestedArray("values");
     for (int i = 0; i < streamConfig.numValues; i++) array.add(values[i]);
     response = "";
@@ -1242,8 +1293,6 @@ void IRAM_ATTR sample_timer_task(void *param) {
         portEXIT_CRITICAL_ISR(&correctionMux);
       }
     } 
-    // Lock stpm before using it
-    // xSemaphoreTake(stpm_mutex, portMAX_DELAY);
     // With correction, this should normally be 1
     for (int i = 0; i < samplesToTake; i++) {
       totalSamples++;
@@ -1268,8 +1317,6 @@ void IRAM_ATTR sample_timer_task(void *param) {
         ESP.restart();
       }
     }
-    // Unlock stpm 
-    // xSemaphoreGive(stpm_mutex);
 
   }
   vTaskDelete( NULL );
@@ -1316,7 +1363,6 @@ void disableSqwvInterrupt() {
   gpio_isr_handler_remove(rtc_int_pin);
   gpio_uninstall_isr_service();
 }
-
 
 
 /****************************************************
@@ -1379,7 +1425,6 @@ void IRAM_ATTR sqwvTriggered(void * instance) {
  ****************************************************/
 void stopSampling() {
   if (rtc.connected) {
-    // rtc.disableInterrupt();
     disableSqwvInterrupt();
   }
   state = SampleState::IDLE;
@@ -1445,20 +1490,10 @@ void startSampling(bool waitVoltage) {
   state = SampleState::SAMPLE;
   sampleCB();
 
-  // xTaskCreatePinnedToCore(  sample_timer_task,     /* Task function. */
-  //     "Consumer",       /* String with name of task. */
-  //     4096,            /* Stack size in words. */
-  //     NULL,             /* Parameter passed as input of the task */
-  //     10,                /* Priority of the task. */
-  //     &xHandle,            /* Task handle. */
-  //     1);
-
   counter = 0;
   sentSamples = 0;
   totalSamples = 0;
   correctSamples = 0;
-  // TIMER_CYCLES_FAST = (1000000) / streamConfig.samplingRate; // Cycles between HW timer inerrupts
-  //             240Mhz      240       e.g. 4000Hz     
       
   TIMER_CYCLES_FAST = (1000000) / streamConfig.samplingRate; // Cycles between HW timer inerrupts
   calcChunkSize();
@@ -1469,16 +1504,16 @@ void startSampling(bool waitVoltage) {
   firstSqwv = true;
   sqwCounter = 0;
   sqwCounter2 = 0;
-    
+  
+  // If rtc is connected, sync SR with this 
   if (rtc.connected) {
-    // rtc.enableInterrupt(1, sqwvTriggered); // TODO
     setupSqwvInterrupt();
   }
   
   // If we should wait for voltage to make positive zerocrossing
   if (waitVoltage) {
-    while(stpm34.readVoltage(1) > 0) {yield();}
-    while(stpm34.readVoltage(1) < 0) {yield();}
+    while(stpm34.readVoltage(1) > 0) yield();
+    while(stpm34.readVoltage(1) < 0) yield();
   }
   freqCalcNow = micros();
   freqCalcStart = micros();
@@ -1487,6 +1522,9 @@ void startSampling(bool waitVoltage) {
   turnInterrupt(true);
 }
 
+/****************************************************
+ * Interrupt must be turned on/off on the correct core
+ ****************************************************/
 void turnInterrupt(bool on) {
   if (on) {
     xTaskCreatePinnedToCore(  sample_timer_task,     /* Task function. */
@@ -1496,21 +1534,9 @@ void turnInterrupt(bool on) {
         32,                /* Priority of the task. */ // Highest priority possible?
         &xHandle,            /* Task handle. */
         1);
-    xTaskCreatePinnedToCore(  startTimerInterrupt,     /* Task function. */
-        "startInterrupt",       /* String with name of task. */
-        4096,            /* Stack size in words. */
-        NULL,             /* Parameter passed as input of the task */
-        2,                /* Priority of the task. */
-        NULL,            /* Task handle. */
-        1);
+    xTaskCreatePinnedToCore(startTimerInterrupt, "startInterrupt", 4096, NULL, 2, NULL, 1);
   } else {
-    xTaskCreatePinnedToCore(  stopTimerInterrupt,     /* Task function. */
-        "stopInterrupt",       /* String with name of task. */
-        4096,            /* Stack size in words. */
-        NULL,             /* Parameter passed as input of the task */
-        2,                /* Priority of the task. */
-        NULL,            /* Task handle. */
-        1);
+    xTaskCreatePinnedToCore(stopTimerInterrupt, "stopInterrupt", 4096, NULL, 2, NULL, 1);
   }
 }
 
@@ -1526,6 +1552,7 @@ void startTimerInterrupt( void * param ) {
   // timerWrite(timer, TIMER_CYCLES_FAST-1);
   timerAlarmEnable(timer);
   sei();
+  // Delete this task
   vTaskDelete( NULL );
 }
 
@@ -1592,6 +1619,9 @@ void initMDNS() {
   MDNS.addService("_elec", "_tcp", STANDARD_TCP_STREAM_PORT);
 }
 
+/****************************************************
+ * Reading, storing and resetting the consumed energy
+ ****************************************************/
 void storeEnergy() {
   xSemaphoreTake(stpm_mutex, portMAX_DELAY);
   double energy = stpm34.readActiveEnergy(1);
@@ -1601,6 +1631,7 @@ void storeEnergy() {
   // Reset energy in class
   stpm34.ph1Energy.active = 0.0;
 }
+
 /****************************************************
  * Update energy handler
  ****************************************************/
@@ -1772,6 +1803,57 @@ void printInfoString() {
   }
   logger.flushAppended();
 }
+
+#ifdef SENSOR_BOARD
+/****************************************************
+ * Sensor board button press callback
+ ****************************************************/
+void btnPressed() {
+  relay.set(!relay.state);
+}
+/****************************************************
+ * Sensor board sensor callbacks
+ ****************************************************/
+void newTempReading(float temp) {
+  JsonObject obj = docSend.to<JsonObject>();
+  obj.clear();
+  docSend["temp"] = temp;
+  docSend["unit"] = "C";
+  sendSensorReading();
+}
+void newHumReading(float humidity) {
+  JsonObject obj = docSend.to<JsonObject>();
+  obj.clear();
+  docSend["hum"] = humidity;
+  docSend["unit"] = "%";
+  sendSensorReading();
+}
+void newPIRReading(bool PIR) {
+  JsonObject obj = docSend.to<JsonObject>();
+  obj.clear();
+  docSend["PIR"] = PIR;
+  sendSensorReading();
+}
+void newLightReading(uint32_t light) {
+  JsonObject obj = docSend.to<JsonObject>();
+  obj.clear();
+  docSend["light"] = light;
+  docSend["unit"] = "lux";
+  sendSensorReading();
+}
+/****************************************************
+ * Send sensor data over mqtt
+ ****************************************************/
+void sendSensorReading() {
+  docSend["ts"] = myTime.timestamp().seconds;
+  response = "";
+  serializeJson(docSend, response);
+  if (mqtt.connected()) mqtt.publish(mqttTopicPubSample, response.c_str());
+  #ifdef REPORT_VALUES_ON_LIFENESS
+  logger.log(response.c_str());
+  #endif
+}
+#endif
 
 /****************************************************
  * Callback if relay is switched
