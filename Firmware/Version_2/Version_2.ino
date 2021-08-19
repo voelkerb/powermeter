@@ -35,11 +35,12 @@ void IRAM_ATTR sample_ISR();
 void IRAM_ATTR sqwvTriggered(void* instance);
 void ntpSynced(unsigned int confidence);
 #ifdef SENSOR_BOARD
-void btnPressed();
+void btnPressed(BUTTON_PRESS press);
 void newTempReading(float temp);
 void newHumReading(float humidity);
 void newPIRReading(bool PIR);
 void newLightReading(uint32_t light);
+float powerGetter();
 #endif
 
 void logFunc(const char * log, ...);
@@ -321,7 +322,19 @@ void setup() {
   sensorBoard.humCB = &newHumReading;
   sensorBoard.lightCB = &newLightReading;
   sensorBoard.buttonCB = &btnPressed;
+  sensorBoard.activePowerGetter = &powerGetter;
   successAll &= success;
+  // Automatically receive new sensor values on change
+  sensorBoard.setAutoSensorMode(true);
+  // Standard is led showing power 
+  sensorBoard.newLEDPattern(LEDPattern::activePowerPattern, -1, COLOR_BLACK, COLOR_BLACK);
+  if (!successAll) {
+    // On error, let it blink red
+    sensorBoard.newLEDPattern(LEDPattern::blinkPattern, 5000, COLOR_RED, COLOR_BLACK);
+  } else {
+    // On success let it glow green
+    sensorBoard.newLEDPattern(LEDPattern::glowPattern, 5000, COLOR_GREEN, COLOR_BLACK);
+  }
   #endif
 
    // Indicate error if there is any
@@ -479,6 +492,13 @@ void onIdleOrSampling() {
   }
 }
 
+float powerGetter() {
+  xSemaphoreTake(stpm_mutex, portMAX_DELAY);
+  float power = stpm34.readActivePower(1);
+  xSemaphoreGive(stpm_mutex);
+  return power;
+}
+
 /****************************************************
  * Things todo regularly if we are not sampling
  ****************************************************/
@@ -488,19 +508,12 @@ void onIdle() {
 
   #ifdef SENSOR_BOARD
   // Handle serial commands
-  if (Serial.available()) sensorBoard.handle();
+  sensorBoard.update();
   // New data request to the sensor board
   if (millis() - sensorUpdate > SENSOR_UPDATE_INTERVALL) {
     sensorUpdate = millis();
-    if (sensorBoard.ledMode == LED_MODE::POWER) {
-      xSemaphoreTake(stpm_mutex, portMAX_DELAY);
-      float power = stpm34.readActivePower(1);
-      xSemaphoreGive(stpm_mutex);
-      sensorBoard.powerToLEDs(power);
-      sensorBoard.updateLEDs();
-    }
     // Update all sensor values
-    if (sensorBoard.active) sensorBoard.update();
+    if (sensorBoard.active and not sensorBoard.autoMode) sensorBoard.updateSensors();
   }
   #endif
 
@@ -956,8 +969,17 @@ void onWifiConnect() {
     // myTime.updateNTPTime(true); TODO: This breaks everything with the first 5 powermeters 8-13 WTF
     myTime.updateNTPTime();
     if (!mqtt.connect()) logger.log(ERROR, "Cannot connect to MQTT Server %s", mqtt.ip);
+
+    #ifdef SENSOR_BOARD
+    // On success let it glow green
+    sensorBoard.newLEDPattern(LEDPattern::glowPattern, 2000, COLOR_GREEN, COLOR_BLACK);
+    #endif
   } else {
     logger.log(ALL, "Network AP Opened");
+    #ifdef SENSOR_BOARD
+    // On ap mode let it glow
+    sensorBoard.newLEDPattern(LEDPattern::glowPattern, 2000, COLOR_ORANGE, COLOR_BLACK);
+    #endif
   }
 
   // Start the TCP server
@@ -978,6 +1000,10 @@ void onWifiDisconnect() {
     stopSampling();
   }
   if (mqtt.connected()) mqtt.disconnect();
+  #ifdef SENSOR_BOARD
+  // On disconnect glow red
+  sensorBoard.newLEDPattern(LEDPattern::glowPattern, 2000, COLOR_RED, COLOR_BLACK);
+  #endif
 }
 
 /****************************************************
@@ -1006,6 +1032,11 @@ void onClientConnect(WiFiClient &newClient) {
   }
   logger.log("To much clients, could not add client");
   newClient.stop();
+
+  #ifdef SENSOR_BOARD
+  // On ap mode let it glow
+  sensorBoard.newLEDPattern(LEDPattern::blinkPattern, 500, COLOR_GREEN, COLOR_BLACK);
+  #endif
 }
 
 /****************************************************
@@ -1020,6 +1051,10 @@ void onClientDisconnect(WiFiClient &oldClient, size_t i) {
   // if ((WiFiClient*)&oldClient == (WiFiClient*)&exStreamServer) {
   //   exStreamServerNewConnection = true;
   // }
+  #ifdef SENSOR_BOARD
+  // On ap mode let it glow
+  sensorBoard.newLEDPattern(LEDPattern::blinkPattern, 500, COLOR_ORANGE, COLOR_BLACK);
+  #endif
 }
 
 
@@ -1808,8 +1843,24 @@ void printInfoString() {
 /****************************************************
  * Sensor board button press callback
  ****************************************************/
-void btnPressed() {
-  relay.set(!relay.state);
+bool longPress = false;
+void btnPressed(BUTTON_PRESS press) {
+  if (press != BUTTON_PRESS::RELEASE) longPress = false;
+
+  if (press == BUTTON_PRESS::SINGLE) {
+    relay.set(!relay.state);
+  } else if (press == BUTTON_PRESS::LONG_START) {
+    sensorBoard.newLEDPattern(LEDPattern::blinkPattern, -1, COLOR_GREY,COLOR_BLACK);
+    longPress = true;
+  } else if (press == BUTTON_PRESS::RELEASE) {
+    // Long press causes system reset
+    if (longPress) {
+      sensorBoard.newLEDPattern(LEDPattern::staticPattern, -1, COLOR_GREY,COLOR_BLACK);
+      config.makeDefault(false);
+      config.store();
+      ESP.restart();
+    }
+  }
 }
 /****************************************************
  * Sensor board sensor callbacks

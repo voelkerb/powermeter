@@ -364,7 +364,7 @@ void handleJSON() {
     docSend["error"] = false;
     docSend["cmd"]= "sensors";
     #ifdef LATCH_SENSOR_VALUES
-    docSend["error"] = sensorBoard.update(true);
+    docSend["error"] = sensorBoard.updateSensors(true);
     #endif
     docSend["temp"] = sensorBoard.temperature;
     docSend["hum"] = sensorBoard.humidity;
@@ -372,61 +372,58 @@ void handleJSON() {
     docSend["PIR"] = sensorBoard.PIR;
   }
   /*********************** setLED COMMAND ****************************/
-  // {"cmd": "setLED",["mode":"power"],["brightness":<0-100.0>],"LED<0-3>":[<value_red>,<value_green>,<value_blue>]}}
+  // {"cmd": "setLED","pattern":<0-X>,"duration":<dur>,"fgColor":[<value_red>,<value_green>,<value_blue>],["bgColor":[<value_red>,<value_green>,<value_blue>]],["brightness":<0-100.0>]}
   else if(strcmp(cmd, CMD_SET_LED) == 0) {
     bool set = false;
-    const char * mode = root["mode"];
-    JsonVariant brightness = root["brightness"];
-    // automatic mode
-    if (mode) {
-      if(strcmp(mode, "power") == 0) {
-        // Force power update
-        sensorUpdate = millis()-SENSOR_UPDATE_INTERVALL;
-        sensorBoard.ledMode = LED_MODE::POWER;
-        set = true;
-      }
-    }
+    JsonVariant brightnessVariant = root["brightness"];
+    JsonVariant patternVariant = root["pattern"];
+    JsonVariant durationVariant = root["duration"];
     // Set brightness 0-100
-    if (!brightness.isNull()) {
+    if (!brightnessVariant.isNull()) {
       set = true;
       float brightness = root["brightness"].as<float>();
       sensorBoard.setBrightness(brightness);
     }
-    // Manual mode
-    char name[5] = {'\0'};
-    // Loop over possible LED<X> settings
-    for (int i = 0; i < 4; i++) {
-      snprintf(name, 5, "LED%i", i);
-      if (i==0) snprintf(name, 5, "LED");
-      JsonVariant LED_Variant = root[name];
-      // Not inside
-      if (LED_Variant.isNull()) continue;
-      JsonArray led = root[name].as<JsonArray>();
-      if (led.size() != 3) {
-        docSend["msg"] = F("Not a valid \"setLED\" command");
+    if (!patternVariant.isNull()) {
+      unsigned int patternInt = root["pattern"].as<int>();
+      if (patternInt > (int)LEDPattern::numberOfPatterns) {
+        docSend["msg"] = F("Not a valid pattern");
+        return;
+      } 
+      int duration = 5000;
+      if (!durationVariant.isNull()) {
+        duration = root["duration"].as<int>();
+      }
+      JsonVariant fgColorVariant = root["fgColor"];
+      if (fgColorVariant.isNull()) {
+        docSend["msg"] = F("Not FG color set");
         return;
       }
-      sensorBoard.ledMode = LED_MODE::MANUAL;
-      // For color R/G/B
-      for (int j = 0; j < 3; j++) {
-        // set all leds
-        if (i == 0) {
-          sensorBoard.LED[0][j] = led[j].as<uint8_t>();
-          sensorBoard.LED[1][j] = led[j].as<uint8_t>();
-          sensorBoard.LED[2][j] = led[j].as<uint8_t>();
-        // Set just the led i
-        } else {
-          sensorBoard.LED[i-1][j] = led[j].as<uint8_t>();
+      LEDPattern pattern = (LEDPattern)patternInt;
+      JsonArray fgColorArray = root["fgColor"].as<JsonArray>();
+      if (fgColorArray.size() != 3) {
+        docSend["msg"] = F("Not a valid \"fgColor\"");
+        return;
+      }
+      CRGB fgColor = CRGB{fgColorArray[0].as<uint8_t>(), fgColorArray[1].as<uint8_t>(), fgColorArray[2].as<uint8_t>()};
+      CRGB bgColor = COLOR_BLACK;
+      
+      JsonVariant bgColorVariant = root["bgColor"];
+      if (!bgColorVariant.isNull()) {
+        JsonArray bgColorArray = root["bgColor"].as<JsonArray>();
+        if (bgColorArray.size() != 3) {
+          docSend["msg"] = F("Not a valid \"bgColor\"");
+          return;
         }
+        for (int i = 0; i < 3; i++) bgColor.raw[i] = bgColorArray[i].as<uint8_t>();
       }
       set = true;
+      sensorBoard.newLEDPattern(pattern, duration, fgColor, bgColor);
     }
-
     if (!set) {
       docSend["msg"] = F("Not a valid \"setLED\" command");
       return;
     }
-    sensorBoard.updateLEDs();
     docSend["error"] = false;
   }
 #endif
@@ -437,10 +434,10 @@ void handleJSON() {
   else if (strcmp(cmd, CMD_FLOW) == 0) {
     JsonVariant valueVariant = root["value"];
     if (valueVariant.isNull()) {
-      docSend["error"] = false;
       docSend["msg"] = F("Info:Not a valid \"cts\" command");
       return;
     }
+    docSend["error"] = false;
     rts = docRcv["value"].as<bool>();
   }
   /*********************** Request X samples COMMAND *********************/
@@ -454,6 +451,7 @@ void handleJSON() {
         docSend["msg"] = response;
         return;
       }
+      docSend["error"] = false;
       long chunk = samples*streamConfig.measurementBytes;
       // We don't want to send anything
       JsonObject obj = docSend.to<JsonObject>();
@@ -488,6 +486,7 @@ void handleJSON() {
     docSend["ip"] = WiFi.localIP().toString();
     docSend["avg_rate"] = totalSamples/(samplingDuration/1000.0);
     docSend["cmd"] = CMD_STOP;
+    docSend["error"] = false;
   }
 
   /*********************** LOG LEVEL COMMAND ****************************/
@@ -549,6 +548,9 @@ void handleJSON() {
   /*********************** factoryReset COMMAND ****************************/
   // e.g. {"cmd":"factoryReset"}
   else if (strcmp(cmd, CMD_FACTORY_RESET) == 0) {
+    #ifdef SENSOR_BOARD
+    sensorBoard.newLEDPattern(LEDPattern::staticPattern, -1, COLOR_GREY,COLOR_BLACK);
+    #endif
     config.makeDefault();
     config.store();
     ESP.restart();
@@ -557,6 +559,9 @@ void handleJSON() {
   /*********************** basicReset COMMAND ****************************/
   // e.g. {"cmd":"basicReset"}
   else if (strcmp(cmd, CMD_BASIC_RESET) == 0) {
+    #ifdef SENSOR_BOARD
+    sensorBoard.newLEDPattern(LEDPattern::staticPattern, -1, COLOR_GREY,COLOR_BLACK);
+    #endif
     config.makeDefault(false);// Do not reset name
     config.store();
     ESP.restart();
