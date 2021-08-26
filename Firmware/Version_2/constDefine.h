@@ -9,20 +9,19 @@
 
 // #define DEBUG_DEEP
 #define SENT_LIFENESS_TO_CLIENTS
-#define REPORT_VALUES_ON_LIFENESS
+// #define REPORT_VALUES_ON_LIFENESS
 
 #define SEND_INFO_ON_CLIENT_CONNECT
 
 // Serial Speed and DEBUG option
 // #define SERIAL_SPEED 9600
-// #define SERIAL_SPEED 115200  // For use with LORA WAN
-#define SERIAL_SPEED 38400 // For use with sensor board
+#define SERIAL_SPEED 38400 // For use with sensor board and LoRaWAN
 
 #define USE_SERIAL
 // #define SERIAL_LOGGER
 // #define CMD_OVER_SERIAL
 // #define LORA_WAN
-#define SENSOR_BOARD
+// #define SENSOR_BOARD
 #define LATCH_SENSOR_VALUES
 
 // Check for invalid configurations
@@ -48,8 +47,8 @@
 #if defined(SERIAL_LOGGER)
 #error CONFIG ERROR: cannot use LORA WAN module and serial logger
 #endif
-#if SERIAL_SPEED != 115200
-#error CONFIG ERROR: LoRaWAN Module uses 115200 baud (9600 factory default)
+#if SERIAL_SPEED != 38400
+#error CONFIG ERROR: LoRaWAN Module uses 38400 baud (9600 factory default)
 #endif
 #endif
 
