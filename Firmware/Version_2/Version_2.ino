@@ -106,7 +106,7 @@ MQTT mqtt;
 
 
 #ifdef SENSOR_BOARD
-SensorBoard sensorBoard(&Serial);
+SensorBoard sensorBoard(&Serial); //, &logFunc);
 #endif
 
 
@@ -238,7 +238,7 @@ void setup() {
 
   #ifdef USE_SERIAL
     // Setup serial communication
-    #ifdef CMD_OVER_SERIAL
+    #if defined(CMD_OVER_SERIAL) or defined(LORA_WAN) or defined(SENSOR_BOARD)
       Serial.begin(SERIAL_SPEED);
     #else
       // Disable receiving, as this also disbles an interrupt which might occur
@@ -250,7 +250,7 @@ void setup() {
 
   // At first init the rtc module to get a time behavior
   bool successAll = true;
-  bool success = rtc.init();
+  bool successRTC = rtc.init();
   // Init the logging modules
   logger.setTimeGetter(&timeStr);
   #ifdef SERIAL_LOGGER
@@ -267,8 +267,7 @@ void setup() {
     streamLog[i] = theStreamLog;
   }
 
-  if (!success) logger.log(ERROR, "Cannot init RTC");
-  successAll &= success;
+  if (!successRTC) logger.log(ERROR, "Cannot init RTC");
   
   relay.setCallback(relayCB);
 
@@ -278,9 +277,9 @@ void setup() {
 
   // Indicate lifeness / reset
   digitalWrite(ERROR_LED, HIGH);
-  delay(200);
+  delay(100);
   digitalWrite(ERROR_LED, LOW);
-  delay(200);
+  delay(100);
   digitalWrite(ERROR_LED, HIGH);
 
 
@@ -289,9 +288,8 @@ void setup() {
   logger.log(DEBUG, "Core @ %u MHz", coreFreq);
 
   // Init the ringbuffer
-  success = ringBuffer.init();
-  if (!success) logger.log(ERROR, "PSRAM init failed");
-  successAll &= success;
+  bool successRing = ringBuffer.init();
+  if (!successRing) logger.log(ERROR, "PSRAM init failed");
 
   // Init the timer used for sampling
   timer_init();
@@ -299,23 +297,23 @@ void setup() {
   // generate mutex to use the stpm32/34 SPI interface
   stpm_mutex = xSemaphoreCreateMutex();
   // Setup STPM 32
-  success = stpm34.init();
+  bool successSTPM = stpm34.init();
   stpm34._logFunc = &logFunc;
 
   stpm34.setCalibration(config.myConf.calV, config.myConf.calI);
-  if (!success) logger.log(ERROR, "STPM Init Failed");
-  successAll &= success;
-  
+  if (!successSTPM) logger.log(ERROR, "STPM Init Failed");
+  bool success = true;
+
   #ifdef LORA_WAN
   // Init lorawan module with configuration for ttn network
   success = lora.init(&Serial, &logFunc, &loraDownlink);
   lora.setOTAA((LoRaWANConfiguration){APP_EUI, DEV_EUI, APP_KEY, LORA_PORT});
-  successAll &= success;
   #endif
+  successAll = successRTC & successRing & successSTPM & success;
 
   #ifdef SENSOR_BOARD
   // Look if sensor board is connected
-  success = sensorBoard.init();
+  success &= sensorBoard.init();
   // Setup callback functions
   sensorBoard.PIRCB = &newPIRReading;
   sensorBoard.tempCB = &newTempReading;
@@ -323,17 +321,23 @@ void setup() {
   sensorBoard.lightCB = &newLightReading;
   sensorBoard.buttonCB = &btnPressed;
   sensorBoard.activePowerGetter = &powerGetter;
-  successAll &= success;
+  // successAll &= success;
   // Automatically receive new sensor values on change
   sensorBoard.setAutoSensorMode(true);
   // Standard is led showing power 
-  sensorBoard.newLEDPattern(LEDPattern::activePowerPattern, -1, COLOR_BLACK, COLOR_BLACK);
+  sensorBoard.displayPowerColor();
   if (!successAll) {
+    CRGB c[3] = {COLOR_GREEN, COLOR_GREEN, COLOR_GREEN};
+    if (!successRTC) c[0] = COLOR_RED;
+    if (!successSTPM) c[1] = COLOR_RED;
+    if (!successRing or !success) c[2] = COLOR_RED;
+    sensorBoard.setIndividualColors(c,3,false,3000);
+    delay(2000);
     // On error, let it blink red
-    sensorBoard.newLEDPattern(LEDPattern::blinkPattern, 5000, COLOR_RED, COLOR_BLACK);
+    sensorBoard.blink(COLOR_RED, 3000);
   } else {
     // On success let it glow green
-    sensorBoard.newLEDPattern(LEDPattern::glowPattern, 5000, COLOR_GREEN, COLOR_BLACK);
+    sensorBoard.blink(COLOR_GREEN, 3000);
   }
   #endif
 
@@ -512,8 +516,9 @@ void onIdle() {
   // New data request to the sensor board
   if (millis() - sensorUpdate > SENSOR_UPDATE_INTERVALL) {
     sensorUpdate = millis();
+    sensorBoard.setAutoSensorMode(true);
     // Update all sensor values
-    if (sensorBoard.active and not sensorBoard.autoMode) sensorBoard.updateSensors();
+    // if (sensorBoard.active and not sensorBoard.autoMode) sensorBoard.updateSensors();
   }
   #endif
 
@@ -614,13 +619,13 @@ void sendStatusLoRa() {
   float values[5] = {0.0};
   // Lock stpm before using it
   xSemaphoreTake(stpm_mutex, portMAX_DELAY);
-  values[0] = stpm34.readActivePower(1);
+  values[0] = round2<float>(stpm34.readActivePower(1));
   if (values[0] < 0) values[0] = 0.0;
-  values[1] = stpm34.readReactivePower(1);
+  values[1] = round2<float>(stpm34.readReactivePower(1));
   // We want current in A
-  values[2] = stpm34.readRMSCurrent(1)/1000.0;
+  values[2] = round2<float>(stpm34.readRMSCurrent(1)/1000.0);
   // TODO: Something is still wrong with voltage calculation
-  values[3] = stpm34.readRMSVoltage(1)+230.0;
+  values[3] = round2<float>(stpm34.readRMSVoltage(1)+230.0);
   // unit is watt hours and we want kwh
   values[4] = (float)(config.myConf.energy + stpm34.readActiveEnergy(1))/1000.0;
   // Unlock stpm 
@@ -972,13 +977,13 @@ void onWifiConnect() {
 
     #ifdef SENSOR_BOARD
     // On success let it glow green
-    sensorBoard.newLEDPattern(LEDPattern::glowPattern, 2000, COLOR_GREEN, COLOR_BLACK);
+    sensorBoard.glow(COLOR_GREEN, 2000);
     #endif
   } else {
     logger.log(ALL, "Network AP Opened");
     #ifdef SENSOR_BOARD
     // On ap mode let it glow
-    sensorBoard.newLEDPattern(LEDPattern::glowPattern, 2000, COLOR_ORANGE, COLOR_BLACK);
+    sensorBoard.glow(COLOR_ORANGE, 2000);
     #endif
   }
 
@@ -1002,7 +1007,7 @@ void onWifiDisconnect() {
   if (mqtt.connected()) mqtt.disconnect();
   #ifdef SENSOR_BOARD
   // On disconnect glow red
-  sensorBoard.newLEDPattern(LEDPattern::glowPattern, 2000, COLOR_RED, COLOR_BLACK);
+  // sensorBoard.glow(COLOR_RED, 2000);
   #endif
 }
 
@@ -1013,6 +1018,11 @@ void onWifiDisconnect() {
 void onClientConnect(WiFiClient &newClient) {
   logger.log("Client with IP %s connected on port %u", newClient.remoteIP().toString().c_str(), newClient.remotePort());
   
+  #ifdef SENSOR_BOARD
+  // On ap mode let it glow
+  sensorBoard.setColor(COLOR_GREEN, 500);
+  #endif
+
   // Loop over all clients and look where we can store the pointer... 
   for (size_t i = 0; i < MAX_CLIENTS; i++) {
     if (!clientConnected[i]) {
@@ -1032,11 +1042,6 @@ void onClientConnect(WiFiClient &newClient) {
   }
   logger.log("To much clients, could not add client");
   newClient.stop();
-
-  #ifdef SENSOR_BOARD
-  // On ap mode let it glow
-  sensorBoard.newLEDPattern(LEDPattern::blinkPattern, 500, COLOR_GREEN, COLOR_BLACK);
-  #endif
 }
 
 /****************************************************
@@ -1053,7 +1058,7 @@ void onClientDisconnect(WiFiClient &oldClient, size_t i) {
   // }
   #ifdef SENSOR_BOARD
   // On ap mode let it glow
-  sensorBoard.newLEDPattern(LEDPattern::blinkPattern, 500, COLOR_ORANGE, COLOR_BLACK);
+  sensorBoard.setColor(COLOR_ORANGE, 500);
   #endif
 }
 
@@ -1199,7 +1204,6 @@ void sample_timer_task2( void * parameter) {
 
   float data[4] = { 0.0 };
 
-  int test = 0;
   bool success = false;
   while(state != SampleState::IDLE){
 
@@ -1291,8 +1295,6 @@ void IRAM_ATTR sample_timer_task(void *param) {
   timer_sem = xSemaphoreCreateBinary();
 
   float data[4] = { 0.0 };
-
-  int test = 0;
 
   while (state == SampleState::SAMPLE) {
     xSemaphoreTake(timer_sem, portMAX_DELAY);
@@ -1840,28 +1842,89 @@ void printInfoString() {
 }
 
 #ifdef SENSOR_BOARD
+
+bool longPress = false;
+int presses = 0;
+long releaseTimer = millis();
+#define LONG_PRESS_DELAY 5000
+#define DOUBLE_PRESS_DELAY 500
+
+TaskHandle_t longPressHandler = NULL;
+void handleLongPress(void * pvParameters) {
+  vTaskDelay(LONG_PRESS_DELAY);
+  longPress = true;
+  longPressStart();
+  longPressHandler = NULL;
+  vTaskDelete(NULL);
+}
+void singlePress() {
+  relay.set(!relay.state);
+  logger.log("Button Pressed");
+}
+void doublePress() {
+  logger.log("Double Pressed");
+}
+void longPressStart() {
+  logger.log("Long press start");
+  sensorBoard.blink(COLOR_GREY);
+  longPress = true;
+}
+void longPressEnd() {
+  longPress = false;
+  logger.log("Long press end, resetting...");
+  sensorBoard.setRainbow();
+  config.makeDefault(false);
+  config.store();
+  delay(500);
+  ESP.restart();
+}
+
 /****************************************************
  * Sensor board button press callback
  ****************************************************/
-bool longPress = false;
 void btnPressed(BUTTON_PRESS press) {
-  if (press != BUTTON_PRESS::RELEASE) longPress = false;
+  // Remove long press handler on release
+  if (press == BUTTON_PRESS::RELEASE and longPressHandler != NULL) {
+    vTaskDelete(longPressHandler);
+    // Crucial so the delete is handled
+    vTaskDelay(10);
+    longPressHandler = NULL;
+  }
+  // If long press detected and released, long press end
+  if (longPress and press == BUTTON_PRESS::RELEASE) longPressEnd();
 
-  if (press == BUTTON_PRESS::SINGLE) {
-    relay.set(!relay.state);
-  } else if (press == BUTTON_PRESS::LONG_START) {
-    sensorBoard.newLEDPattern(LEDPattern::blinkPattern, -1, COLOR_GREY,COLOR_BLACK);
-    longPress = true;
-  } else if (press == BUTTON_PRESS::RELEASE) {
-    // Long press causes system reset
-    if (longPress) {
-      sensorBoard.newLEDPattern(LEDPattern::staticPattern, -1, COLOR_GREY,COLOR_BLACK);
-      config.makeDefault(false);
-      config.store();
-      ESP.restart();
-    }
+  switch (press) {
+    case BUTTON_PRESS::SINGLE:
+      singlePress();
+      break;
+    case BUTTON_PRESS::PRESS:
+      if (millis()-releaseTimer < DOUBLE_PRESS_DELAY) doublePress();
+      else singlePress();
+      // Check for long press
+      if (longPressHandler != NULL) {
+        vTaskDelete(longPressHandler);
+        // Crucial so the delete is handled
+        vTaskDelay(10);
+        longPressHandler = NULL;
+      }
+      xTaskCreate(handleLongPress, "handleLongPress", 8000, NULL, 1, &longPressHandler);
+      break;
+    case BUTTON_PRESS::RELEASE:
+      releaseTimer = millis();
+      logger.log("Button Released");
+      break;
+    case BUTTON_PRESS::DOUBLE:
+      doublePress();
+      break;
+    case BUTTON_PRESS::LONG_START:
+      longPressStart();
+      break;
+    default:
+      logger.log("Strange Button");
+      break;
   }
 }
+
 /****************************************************
  * Sensor board sensor callbacks
  ****************************************************/
@@ -1876,7 +1939,7 @@ void newHumReading(float humidity) {
   JsonObject obj = docSend.to<JsonObject>();
   obj.clear();
   docSend["hum"] = humidity;
-  docSend["unit"] = "%";
+  docSend["unit"] = "%%";
   sendSensorReading();
 }
 void newPIRReading(bool PIR) {
@@ -1917,6 +1980,13 @@ void relayCB(bool value) {
   if (mqtt.connected()) {
     mqtt.publish(mqttTopicPubSwitch, value ? TRUE_STRING : FALSE_STRING, true);
   }
+  #ifdef SENSOR_BOARD
+  if (value) {
+    sensorBoard.setColor(COLOR_GREEN, 200);
+  } else {
+    sensorBoard.setColor(COLOR_ORANGE, 200);
+  }
+  #endif
   logger.log("Switched %s", value ? "on" : "off");
 }
 
@@ -2007,6 +2077,9 @@ void setupOTA() {
   // ArduinoOTA.setPasswordHash(2"21232f297a57a5a743894a0e4a801fc3");
 
   ArduinoOTA.onStart([]() {
+    #ifdef SENSOR_BOARD
+    sensorBoard.setRainbow(-1);
+    #endif
     storeEnergy();
     updating = true;
     Network::allowNetworkChange = false;
@@ -2039,16 +2112,27 @@ void setupOTA() {
     #ifdef SERIAL_LOGGER
     logger.log("End");
     #endif
+    #ifdef SENSOR_BOARD
+    sensorBoard.setColor(COLOR_GREEN);
+    #endif
   });
 
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    #ifdef SERIAL_LOGGER
     unsigned int percent = (progress / (total / 100));
+    #ifdef SERIAL_LOGGER
     if (percent != oldPercent) {
       Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
-      oldPercent = percent;
     }
     #endif
+    #ifdef SENSOR_BOARD
+    for (int i = 0; i < NUM_LEDS; i++) {
+      float dot = (i+1)*(100/(NUM_LEDS+1));
+      if (oldPercent < dot and percent >= dot) {
+        sensorBoard.setDots(i+1, COLOR_PINK);
+      } 
+    }
+    #endif
+    oldPercent = percent;
   });
   
   ArduinoOTA.onError([](ota_error_t error) {
@@ -2059,6 +2143,9 @@ void setupOTA() {
     else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
     else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
     else if (error == OTA_END_ERROR) Serial.println("End Failed");
+    #endif
+    #ifdef SENSOR_BOARD
+    sensorBoard.setColor(COLOR_RED);
     #endif
     // No matter what happended, simply restart
     ESP.restart();
