@@ -66,6 +66,10 @@ const char * MY_STANDARD_WIFIS[] = {
 * ```LORA_PORT```: Port over which data is sent and received.
 
 
+### SensorBoard Settings:
+
+* ```SENSOR_BOARD```: Comment to disable, uncomment to enable SensorBoard connection via the custom [SensorBoard](https://github.com/voelkerb/powermeter.sensorboard/). Therewith you can measure temperature, humidity, light and people's motion next to the [PowerMeter]. It further has a button to toggle the relay and LEDs to indicate the current power consumption and interactions with the [PowerMeter]
+* ```SENSOR_UPDATE_INTERVALL```: Update interval for sensor measurements if in latch mode. In the automatic mode, sensor values are sent by the SensorBoard if they have changed.
 
 ## Compile from source using Arduino or PlatformIO
 

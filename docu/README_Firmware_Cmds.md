@@ -17,8 +17,8 @@ We will further see how to use commands to interface with a PowerMeter.
 **Each command sent to the [PowerMeter] over USB or a TCP channel requires JSON encoding as ```{"cmd":<cmdName>,[optional]}``` and is answered by a JSON encoded answer message preceded by a the text "Info:". If an error occurred while processing the commmand, the error key is set true in the returned JSON.**
 
 ## Overview
-| CMD        | Description         
-| ------------- |-------------|
+| CMD                                            | Description                                  |        
+| ---------------------------------------------- |----------------------------------------------|
 | ["info"](#info)                                | Get basic information                        |
 | ["switch"](#relay)                             | Switch relay _on_ or _off_                   |
 | ["mdns"](#name)                                | Set new mDNS and general [PowerMeter] name   |
@@ -41,7 +41,13 @@ We will further see how to use commands to interface with a PowerMeter.
 | ["streamServer"](#using-a-stream-server)       | Set stream server                            |
 | ["ntp"](#time-synchronization)                 | Trigger NTP sync                             |
 | ["timeServer"](#time-synchronization)          | Set time server for NTP                      |
-| ["lora"](#lora)                                | Interface with the LoRaWAN                   |
+| ["lora"](#lora)                                | Interface with the LoRaWAN module            |
+| ["getSensors"](#getting-sensor-values)         | Get sensor reading of all sensors            |
+| ["getHum"](#getting-sensor-values)             | Get humidity level                           |
+| ["getTemp"](#getting-sensor-values)            | Get temperature                              |
+| ["getLight"](#getting-sensor-values)           | Get light intensity                          |
+| ["getPIR"](#getting-sensor-values)             | Get binary movement detection                |
+| ["setLED"](#changing-the-leds)                 | Set the LEDs to show a specific pattern      |
 
 ## Info
 ```{"cmd":"info"}```\
@@ -191,6 +197,51 @@ Mqtt can also be used to send any command. Special topics are used to switch the
   powermeter/powermeter26/state/sample {"value":15.28467,"unit":"W","ts":"03/02/2021 12:08:28.209"}
   ...
   ```
+
+## SensorBoard
+If a [SensorBoard](https://github.com/voelkerb/powermeter.sensorboard/) is connected to the expansion header and the Firmware is configured to make use of it (see [compile info](https://github.com/voelkerb/powermeter/blob/master/docu/README_Firmware_2_compile.md)), additional environmental sensor data is available.
+
+### Getting sensor values
+
+* ```{"cmd":"getPIR"}```\
+Returns if motion is detected near the [PowerMeter].
+
+* ```{"cmd":"getHum"}```\
+Returns the current humidity level in %.
+
+* ```{"cmd":"getTemp"}```\
+Returns the current temperature in degrees Celsius.
+
+* ```{"cmd":"getLight"}```\
+Returns the current light intensity in Lux.
+
+* ```{"cmd":"getSensors"}```\
+Returns all sensor values.
+
+### Changing the LEDs
+
+```bash
+{"cmd":"setLED","brightness":<brightness>,"pattern":<patter>,"duration":<duration>,"fgColor":[<red>,<green>,<blue>],"bgColor":[<red>,<green>,<blue>]}
+```
+* ```<brightness>``` (optional): ```0.0-100.0```
+  * gets permanently stored as the new maximum brightness value.
+* ```<pattern>``` (optional): ```0-5```; the specific LED pattern to show.
+  * ```0```: _static_ pattern, shows a static color
+  * ```1```: _blink_ pattern, blink between foreground and background color. The blink interval is 1s.
+  * ```2```: _round_ pattern, one LED (fgColor) goes around. Other LEDs in bgColor. The time to move to the next LED is 200ms.
+  * ```3```: _glow_ pattern, glow (fade) from fg to bg color and back. Glowing takes around 1.5s.
+  * ```4```: _power_ pattern, show the power consumption mapped to a color (<3W = Black, 3-500W linear mapped between green and red, >500W full red). The LED color is updated depending on the current power each 5s.
+* ```<duration>``` (optional): ```-1-2^32```
+  * duration in milliseconds, the new patter is shown. Afterwards, the last pattern (with a duration of -1) is shown.
+  * ```-1``` indicates that the pattern should be shown for infinite length.
+* ```<fgColor>``` (optional):
+  * foreground color of the pattern.
+  * array with three values from ```0-255``` for each color: _red_, _green_, _blue_
+  * default: [64,64,64]
+* ```<bgColor>``` (optional):
+  * background color of the pattern.
+  * array with three values from ```0-255``` for each color: _red_, _green_, _blue_
+  * default: [0,0,0]
 
 ## LoRaWAN
 If a supported module is connected to the expansion header and the Firmware is configured to make use of it (see [compile info](https://github.com/voelkerb/powermeter/blob/master/docu/README_Firmware_2_compile.md)), data is also sent via LoRaWAN.
