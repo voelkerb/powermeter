@@ -384,30 +384,34 @@ void handleJSON() {
       float brightness = root["brightness"].as<float>();
       sensorBoard.setBrightness(brightness);
     }
+    // Check if valid pattern
     if (!patternVariant.isNull()) {
       unsigned int patternInt = root["pattern"].as<int>();
-      if (patternInt > (int)LEDPattern::numberOfPatterns) {
+      if (patternInt >= (int)LEDPattern::numberOfPatterns) {
         docSend["msg"] = F("Not a valid pattern");
         return;
-      } 
+      }
+      // Standard duration is 5 seconds
       int duration = 5000;
       if (!durationVariant.isNull()) {
         duration = root["duration"].as<int>();
       }
-      JsonVariant fgColorVariant = root["fgColor"];
-      if (fgColorVariant.isNull()) {
-        docSend["msg"] = F("Not FG color set");
-        return;
-      }
+      // Convert to pattern
       LEDPattern pattern = (LEDPattern)patternInt;
-      JsonArray fgColorArray = root["fgColor"].as<JsonArray>();
-      if (fgColorArray.size() != 3) {
-        docSend["msg"] = F("Not a valid \"fgColor\"");
-        return;
-      }
-      CRGB fgColor = CRGB{fgColorArray[0].as<uint8_t>(), fgColorArray[1].as<uint8_t>(), fgColorArray[2].as<uint8_t>()};
+      // Standard colors for fg and bg
+      CRGB fgColor = COLOR_GREY;
       CRGB bgColor = COLOR_BLACK;
-      
+      // Get fg color if passed
+      JsonVariant fgColorVariant = root["fgColor"];
+      if (!fgColorVariant.isNull()) {
+        JsonArray fgColorArray = root["fgColor"].as<JsonArray>();
+        if (fgColorArray.size() != 3) {
+          docSend["msg"] = F("Not a valid \"fgColor\"");
+          return;
+        }
+        for (int i = 0; i < 3; i++) fgColor.raw[i] = fgColorArray[i].as<uint8_t>();
+      }
+      // Get bg color if passed
       JsonVariant bgColorVariant = root["bgColor"];
       if (!bgColorVariant.isNull()) {
         JsonArray bgColorArray = root["bgColor"].as<JsonArray>();
@@ -418,7 +422,9 @@ void handleJSON() {
         for (int i = 0; i < 3; i++) bgColor.raw[i] = bgColorArray[i].as<uint8_t>();
       }
       set = true;
-      sensorBoard.newLEDPattern(pattern, duration, fgColor, bgColor);
+      // Staticpattern needs special treatment
+      if (pattern == LEDPattern::staticPattern) sensorBoard.setColor(fgColor, duration);
+      else sensorBoard.newLEDPattern(pattern, duration, fgColor, bgColor);
     }
     if (!set) {
       docSend["msg"] = F("Not a valid \"setLED\" command");
@@ -459,7 +465,6 @@ void handleJSON() {
       if (ringBuffer.available() < chunk) {
         return;
       }
-      long start = millis();
       // Send the chunk of data
       if (streamConfig.stream == StreamType::TCP){
         writeData(*sendStream, chunk);
@@ -549,7 +554,7 @@ void handleJSON() {
   // e.g. {"cmd":"factoryReset"}
   else if (strcmp(cmd, CMD_FACTORY_RESET) == 0) {
     #ifdef SENSOR_BOARD
-    sensorBoard.newLEDPattern(LEDPattern::staticPattern, -1, COLOR_GREY,COLOR_BLACK);
+    sensorBoard.setColor(COLOR_GREY);
     #endif
     config.makeDefault();
     config.store();
@@ -560,7 +565,7 @@ void handleJSON() {
   // e.g. {"cmd":"basicReset"}
   else if (strcmp(cmd, CMD_BASIC_RESET) == 0) {
     #ifdef SENSOR_BOARD
-    sensorBoard.newLEDPattern(LEDPattern::staticPattern, -1, COLOR_GREY,COLOR_BLACK);
+    sensorBoard.setColor(COLOR_GREY);
     #endif
     config.makeDefault(false);// Do not reset name
     config.store();
