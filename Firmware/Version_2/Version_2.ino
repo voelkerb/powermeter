@@ -518,7 +518,7 @@ void onIdle() {
     sensorUpdate = millis();
     sensorBoard.setAutoSensorMode(true);
     // Update all sensor values
-    // if (sensorBoard.active and not sensorBoard.autoMode) sensorBoard.updateSensors();
+    if (sensorBoard.active and not sensorBoard.autoMode) sensorBoard.updateSensors();
   }
   #endif
 

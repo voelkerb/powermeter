@@ -22,7 +22,6 @@
 // #define CMD_OVER_SERIAL
 // #define LORA_WAN
 // #define SENSOR_BOARD
-#define LATCH_SENSOR_VALUES
 
 // Check for invalid configurations
 #if defined(SENSOR_BOARD) 
@@ -168,13 +167,6 @@ const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define CMD_GET_LIGHT "getLight"
 #define CMD_GET_SENSORS "getSensors"
 #define CMD_SET_LED "setLED"
-
-// Communication with SENSOR BOARD
-#define CMD_PIR "PIR"
-#define CMD_TEMP "Temp"	
-#define CMD_HUM "Hum"
-#define CMD_LIGHT "Light"
-#define CMD_SENSORS "Sensors"
 #endif
 
 
