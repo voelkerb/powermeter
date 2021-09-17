@@ -42,11 +42,16 @@ We will further see how to use commands to interface with a PowerMeter.
 | ["ntp"](#time-synchronization)                 | Trigger NTP sync                             |
 | ["timeServer"](#time-synchronization)          | Set time server for NTP                      |
 | ["lora"](#lora)                                | Interface with the LoRaWAN module            |
+| ["sensorBoardInfo"](#sensorboard)              | Get info and config of sensor board          |
 | ["getSensors"](#getting-sensor-values)         | Get sensor reading of all sensors            |
 | ["getHum"](#getting-sensor-values)             | Get humidity level                           |
 | ["getTemp"](#getting-sensor-values)            | Get temperature                              |
 | ["getLight"](#getting-sensor-values)           | Get light intensity                          |
 | ["getPIR"](#getting-sensor-values)             | Get binary movement detection                |
+| ["calibrateTemp"](#calibrating-sensor-values)  | Set offset of temperature sensor             |
+| ["calibrateHum"](#calibrating-sensor-values)   | Set offset of humidity sensor                |
+| ["calibrateLight"](#calibrating-sensor-values) | Set multiplier for light sensor              |
+| ["powerIndication"](#eco-feedback)             | Set min and max power for eco feedback       |
 | ["setLED"](#changing-the-leds)                 | Set the LEDs to show a specific pattern      |
 
 ## Info
@@ -117,8 +122,10 @@ Calibrate the [PowerMeter].
 Every measured voltage and current value is multiplied by the calibration factor. Power and Energy are multiplied by ```<calV>```*```<calI>```.
 
 ## Reset Energy
-```{"cmd":"resetEnergy"}```\
-Simply resets the accumulated energy stored in flash. 
+```{"cmd":"resetEnergy","energy":<energy>,"ts",<ts>}```\
+Simply resets the accumulated energy stored in flash.
+* ```<energy>``` (optional): float value in Watthours. If no value is provided, the energy is reset to 0Wh.
+* ```<ts>``` (optional): unix timestamp to indicate the start time of energy accumulation. If no value is provided the current time is used.  
 
 ## Time synchronization
 ```{"cmd":"ntp"}```\
@@ -169,6 +176,16 @@ powermeter/powermeter15/state/sample {"power":1116.89,"inUse":true,"current":4.8
 powermeter/powermeter28/state/sample {"power":0.01,"inUse":false,"current":0,"energy":0,"volt":230.85,"ts":"1614681576"}
 powermeter/powermeter27/state/sample {"power":0,"current":0,"inUse":false,"energy":0,"volt":231.28,"ts":"1614681576"}
 ```
+If a [SensorBoard](#sensorboard) is connected to the [PowerMeter], all sensor values are further published over MQTT. Whenever a sensor changes its value, it is published under a distinct topic with the timestamp and unit.
+```bash
+powermeter/powermeter11/state/sensors/temp {"temp":25.5,"unit":"C","ts":1631873651}
+powermeter/powermeter11/state/sensors/PIR {"PIR":true,"ts":1631873717}
+powermeter/powermeter11/state/sensors/hum {"hum":51.7,"unit":"%","ts":1631873716}
+powermeter/powermeter11/state/sensors/light {"light":110,"unit":"lux","ts":1631873486}
+powermeter/powermeter08/state/sensors/temp {"temp":26.2,"unit":"C","ts":1631873706}
+powermeter/powermeter08/state/sensors/hum {"hum":60.8,"unit":"%","ts":1631873716}
+powermeter/powermeter08/state/sensors/light {"light":352,"unit":"lux","ts":1631873616}
+```
 
 ### Sending MQTT messages
 Mqtt can also be used to send any command. Special topics are used to switch the relay or to get basic electricity related measurements, but any of the available commands can be sent.
@@ -201,6 +218,13 @@ Mqtt can also be used to send any command. Special topics are used to switch the
 ## SensorBoard
 If a [SensorBoard](https://github.com/voelkerb/powermeter.sensorboard/) is connected to the expansion header and the Firmware is configured to make use of it (see [compile info](https://github.com/voelkerb/powermeter/blob/master/docu/README_Firmware_2_compile.md)), additional environmental sensor data is available.
 
+* ```{"cmd":"sensorBoardInfo"}```\
+  Returns information about the sensor board and all calibration parameters.\
+  Sample output:
+  ```bash
+  {"error":false,"tempOffset":-2.5,"humOffset":10,"brightness":100,"calLight":1,"minLEDWatt":2,"maxLEDWatt":200,"active":true,"autoMode":true}
+  ```
+
 ### Getting sensor values
 
 * ```{"cmd":"getPIR"}```\
@@ -217,6 +241,17 @@ Returns the current light intensity in Lux.
 
 * ```{"cmd":"getSensors"}```\
 Returns all sensor values.
+
+### Calibrating sensor values
+
+* ```{"cmd":"calibrateTemp","offset":<offset>}```\
+```<offset>```: ```float``` gets permanently stored as an offset added to the measured temperature.
+
+* ```{"cmd":"calibrateHum","offset":<offset>}```\
+  ```<offset>```: ```float``` gets permanently stored as an offset added to the measured humidity level.
+
+* ```{"cmd":"calibrateLight","value":<value>}```\
+  ```<value>```: ```float``` gets permanently stored as a value multiplied with the measured light intensity level.
 
 ### Changing the LEDs
 
@@ -242,6 +277,14 @@ Returns all sensor values.
   * background color of the pattern.
   * array with three values from ```0-255``` for each color: _red_, _green_, _blue_
   * default: [0,0,0]
+
+### Eco Feedback
+
+Use the build in LEDs of the SensorBoard as Eco-Feedback. This is the standard setting when the [PowerMeter] boots. 
+
+* ```{"cmd":"powerIndication","min":<minW>,"max":<maxW>}```
+  * ```<minW>``` (optional): ```float``` minimum Watt. If less power is drawn, the LEDs are turned black.If exactly ```<minW>```W are drawn, the LEDs will indicate green. 
+  * ```<maxW>``` (optional): ```float``` maximum Watt. If more power is drawn, the LEDs are full red. Otherwise, they linearly map between full green on ```<minW>```W and full red on ```<maxW>```W. 
 
 ## LoRaWAN
 If a supported module is connected to the expansion header and the Firmware is configured to make use of it (see [compile info](https://github.com/voelkerb/powermeter/blob/master/docu/README_Firmware_2_compile.md)), data is also sent via LoRaWAN.
