@@ -383,6 +383,7 @@ void handleJSON() {
       set = true;
       float brightness = root["brightness"].as<float>();
       sensorBoard.setBrightness(brightness);
+      config.storeSensorBoard();
     }
     // Check if valid pattern
     if (!patternVariant.isNull()) {
@@ -399,37 +400,138 @@ void handleJSON() {
       // Convert to pattern
       LEDPattern pattern = (LEDPattern)patternInt;
       // Standard colors for fg and bg
-      CRGB fgColor = COLOR_GREY;
-      CRGB bgColor = COLOR_BLACK;
-      // Get fg color if passed
-      JsonVariant fgColorVariant = root["fgColor"];
-      if (!fgColorVariant.isNull()) {
-        JsonArray fgColorArray = root["fgColor"].as<JsonArray>();
-        if (fgColorArray.size() != 3) {
-          docSend["msg"] = F("Not a valid \"fgColor\"");
-          return;
+      CRGB colors[2] = {COLOR_GREY, COLOR_BLACK};
+      char * names[2] = {"fgColor","bgColor"};
+      for (int n = 0; n < 2; n++) {
+        // Get fg color if passed
+        JsonVariant colorVariant = root[names[n]];
+        if (!colorVariant.isNull()) {
+          JsonArray colorArray = root[names[n]].as<JsonArray>();
+          if (colorArray.size() != 3) {
+            response = "Not a valid ";
+            response += names[n];
+            docSend["msg"] = response;
+            return;
+          }
+          for (int i = 0; i < 3; i++) colors[n].raw[i] = colorArray[i].as<uint8_t>();
         }
-        for (int i = 0; i < 3; i++) fgColor.raw[i] = fgColorArray[i].as<uint8_t>();
-      }
-      // Get bg color if passed
-      JsonVariant bgColorVariant = root["bgColor"];
-      if (!bgColorVariant.isNull()) {
-        JsonArray bgColorArray = root["bgColor"].as<JsonArray>();
-        if (bgColorArray.size() != 3) {
-          docSend["msg"] = F("Not a valid \"bgColor\"");
-          return;
-        }
-        for (int i = 0; i < 3; i++) bgColor.raw[i] = bgColorArray[i].as<uint8_t>();
       }
       set = true;
       // Staticpattern needs special treatment
-      if (pattern == LEDPattern::staticPattern) sensorBoard.setColor(fgColor, duration);
-      else sensorBoard.newLEDPattern(pattern, duration, fgColor, bgColor);
+      if (pattern == LEDPattern::staticPattern) sensorBoard.setColor(colors[0], duration);
+      else sensorBoard.newLEDPattern(pattern, duration, colors[0], colors[1]);
     }
     if (!set) {
       docSend["msg"] = F("Not a valid \"setLED\" command");
       return;
     }
+    docSend["error"] = false;
+  }
+
+  /*********************** calibrateTemp COMMAND ****************************/
+  // {"cmd": "calibrateTemp"}
+  else if(strcmp(cmd, CMD_CAL_TEMP) == 0) {
+    if (state == SampleState::IDLE) {
+      JsonVariant valueVariant = root["offset"];
+      if (valueVariant.isNull()) {
+          docSend["msg"] = "\"Offset\" parameter missing";
+          return;
+      }
+      sensorBoard.config.tempOffset = root["offset"].as<float>();
+      config.storeSensorBoard();
+      response = "Set temp offset to: ";
+      response += sensorBoard.config.tempOffset;
+      docSend["msg"] = response;
+      docSend["error"] = false;
+    } else {
+      setBusyResponse();
+      docSend["msg"] = response;
+      docSend["state"] = "busy";
+    }
+  }
+  /*********************** calibrateHum COMMAND ****************************/
+  // {"cmd": "calibrateTemp"}
+  else if(strcmp(cmd, CMD_CAL_HUM) == 0) {
+    if (state == SampleState::IDLE) {
+      JsonVariant valueVariant = root["offset"];
+      if (valueVariant.isNull()) {
+          docSend["msg"] = "\"Offset\" parameter missing";
+          return;
+      }
+      sensorBoard.config.humOffset = root["offset"].as<float>();
+      config.storeSensorBoard();
+      response = "Set hum offset to: ";
+      response += sensorBoard.config.humOffset;
+      docSend["msg"] = response;
+      docSend["error"] = false;
+    } else {
+      setBusyResponse();
+      docSend["msg"] = response;
+      docSend["state"] = "busy";
+    }
+  }
+  /*********************** calibrateLight COMMAND ****************************/
+  // {"cmd": "calibrateLight"}
+  else if(strcmp(cmd, CMD_CAL_LIGHT) == 0) {
+    if (state == SampleState::IDLE) {
+      JsonVariant valueVariant = root["value"];
+      if (valueVariant.isNull()) {
+          docSend["msg"] = "Calibration \"value\" missing";
+          return;
+      }
+      sensorBoard.config.lightCal = root["value"].as<float>();
+      config.storeSensorBoard();
+      response = "Set light cal to: ";
+      response += sensorBoard.config.lightCal;
+      docSend["msg"] = response;
+      docSend["error"] = false;
+    } else {
+      setBusyResponse();
+      docSend["msg"] = response;
+      docSend["state"] = "busy";
+    }
+  }
+  /*********************** power indication COMMAND ****************************/
+  // {"cmd": "calibrateTemp"}
+  else if(strcmp(cmd, CMD_PWR_IND) == 0) {
+    if (state == SampleState::IDLE) {
+      JsonVariant minVariant = root["min"];
+      JsonVariant maxVariant = root["max"];
+      // Update new min setting
+      if (!minVariant.isNull()) {
+        sensorBoard.config.minLEDWatt = root["min"].as<float>();
+      }
+      // Update new max setting
+      if (!maxVariant.isNull()) {
+        sensorBoard.config.maxLEDWatt = root["max"].as<float>();
+      }
+      // Store values on change
+      if (!minVariant.isNull() or !maxVariant.isNull()) {
+        config.storeSensorBoard();
+      }
+      response = "Power indication from ";
+      response += sensorBoard.config.minLEDWatt;
+      response += "W -> ";
+      response += sensorBoard.config.maxLEDWatt;
+      response += "W";
+      docSend["msg"] = response;
+      docSend["error"] = false;
+      sensorBoard.displayPowerColor();
+    } else {
+      setBusyResponse();
+      docSend["msg"] = response;
+      docSend["state"] = "busy";
+    }
+  }// {"cmd": "calibrateTemp"}
+  else if(strcmp(cmd, CMD_SENSOR_BOARD_INFO) == 0) {
+    docSend["tempOffset"] = sensorBoard.config.tempOffset;
+    docSend["humOffset"] = sensorBoard.config.humOffset;
+    docSend["brightness"] = sensorBoard.config.brightness;
+    docSend["calLight"] = sensorBoard.config.lightCal;
+    docSend["minLEDWatt"] = sensorBoard.config.minLEDWatt;
+    docSend["maxLEDWatt"] = sensorBoard.config.maxLEDWatt;
+    docSend["active"] = sensorBoard.active;
+    docSend["autoMode"] = sensorBoard.autoMode;
     docSend["error"] = false;
   }
 #endif
@@ -867,13 +969,32 @@ void handleJSON() {
     }
   }
   /*********************** Reset energy COMMAND ****************************/
-  // e.g. {"cmd":"clearLog"}
+  // e.g. {"cmd":"resetEnergy"}
   else if (strcmp(cmd, CMD_RESET_ENERGY) == 0) {
     if (state == SampleState::IDLE) {
+      // If energy passed
+      JsonVariant valueVariant = root["energy"];
+      float value = 0;
+      if (!valueVariant.isNull()) {
+        value = docRcv["energy"].as<float>();
+      }
+      // If timestamp passed
+      Timestamp time = myTime.timestamp();
+      JsonVariant tsVariant = root["ts"];
+      if (!tsVariant.isNull()) {
+        time.seconds = docRcv["ts"].as<uint32_t>();
+        time.milliSeconds = 0;
+      }
+      // Reset energy
       stpm34.resetEnergies();
-      config.setEnergy(0);
+      config.setEnergy(value);
+      // Set time
+      config.myConf.energyReset = time;
       docSend["error"] = false;
-      response = "Energy reset!";
+      response = "Energy reset to ";
+      response += value;
+      response += ", @";
+      response += myTime.timeStr(time);
       docSend["msg"] = response;
     } else {
       setBusyResponse();
