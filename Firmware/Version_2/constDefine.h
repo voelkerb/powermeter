@@ -4,6 +4,14 @@
 #include "privateConfig.h"
 #endif
 
+
+// Does the meter have a LoRaWAN module connected to the expansion header?
+// #define LORA_WAN
+
+// Does the meter have a SENSOR board connected to the expansion header?
+#define SENSOR_BOARD
+
+
 // Version string
 #define VERSION "2.3"
 
@@ -20,8 +28,6 @@
 #define USE_SERIAL
 // #define SERIAL_LOGGER
 // #define CMD_OVER_SERIAL
-// #define LORA_WAN
-// #define SENSOR_BOARD
 
 // Check for invalid configurations
 #if defined(SENSOR_BOARD) 
@@ -84,32 +90,40 @@
 // We allow a max of 3 tcp clients for performance reasons
 #define MAX_CLIENTS 3
 
-const char * LOG_FILE = "/log.txt";
+#define DEF_LOG_FILE "/log.txt"
 
-const char LOG_PREFIX_SERIAL[] = "";
-const char LOG_PREFIX[] = "Info:";
+#define DEF_LOG_PREFIX_SERIAL ""
+#define DEF_LOG_PREFIX "Info:"
 
-const char DATA_PREFIX[] = "Data:";
-const size_t PREFIX_SIZE = strlen(DATA_PREFIX); 
+#define DEF_DATA_PREFIX "Data:"
+#define PREFIX_SIZE strlen(DATA_PREFIX)
+
+// const char * LOG_FILE = "/log.txt";
+
+// const char LOG_PREFIX_SERIAL[] = "";
+// const char LOG_PREFIX[] = "Info:";
+
+// const char DATA_PREFIX[] = "Data:";
+// const size_t PREFIX_SIZE = strlen(DATA_PREFIX); 
 
 // Pin definitions
 // Red error led for first flash
-const int ERROR_LED = 13;
+#define ERROR_LED 13
 
 // Pins for STPM34 SPI Connection
-const int STPM_CS = 5;
-const int STPM_SYN = 14;
+#define STPM_CS 5
+#define STPM_SYN 14
 // Reset pin of STPM
-const int STPM_RES = 12;
+#define STPM_RES 12
 
 // Pins for 230V Relay
-const int RELAY_PIN_S = 26;
-const int RELAY_PIN_R = 27;
+#define RELAY_PIN_S 26
+#define RELAY_PIN_R 27
 
 // Pins for RTC conenction
-const int RTC_INT = 25;
-const int RTC_32k = 35;
-const int RTC_RST = 32;
+#define RTC_INT 25
+#define RTC_32k 35
+#define RTC_RST 32
 
 
 // Buffering stuff
@@ -117,7 +131,7 @@ const int RTC_RST = 32;
 // #define MAX_SEND_SIZE 2048
 #define MAX_SEND_SIZE 1024
 // PSRAM Buffer
-const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
+#define PS_BUF_SIZE 3*1024*1024 + 512*1024
 #define COMMAND_MAX_SIZE 500
 
 
@@ -161,12 +175,25 @@ const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define CMD_LORA "lora"
 
 #ifdef SENSOR_BOARD
+// Sensor Board commands
 #define CMD_GET_PIR "getPIR"
 #define CMD_GET_TEMP "getTemp"
 #define CMD_GET_HUM "getHum"
 #define CMD_GET_LIGHT "getLight"
 #define CMD_GET_SENSORS "getSensors"
 #define CMD_SET_LED "setLED"
+#define CMD_SENSOR_BOARD_INFO "sensorBoardInfo"
+#define CMD_CAL_TEMP "calibrateTemp"
+#define CMD_CAL_HUM "calibrateHum"
+#define CMD_CAL_LIGHT "calibrateLight"
+#define CMD_PWR_IND "powerIndication"
+
+// Sensor Board standard values
+#define STD_MIN_LED_WATT 2  // in W
+#define STD_MAX_LED_WATT 200// in W
+#define TEMP_HISTERESIS 0.1 // in °C
+#define HUM_HISTERESIS 0.5  // in %
+#define LIGHT_HISTERESIS 5  // in lux
 #endif
 
 
@@ -190,14 +217,14 @@ const int PS_BUF_SIZE = 3*1024*1024 + 512*1024;
 #define MQTT_TOPIC_CMD "cmd"
 #define MQTT_TOPIC_INFO "info"
 
+#ifdef SENSOR_BOARD
+#define MQTT_TOPIC_SENSOR "sensors"
+#endif
+
 #define TRUE_STRING "true"
 #define FALSE_STRING "false"
 
-#define MAX_MQTT_TOPIC_LEN MAX_MQTT_PUB_TOPIC_SWITCH+MAX_NAME_LEN
-
-const int MAX_MQTT_PUB_TOPIC_SWITCH = sizeof(MQTT_TOPIC_BASE) + sizeof(MQTT_TOPIC_STATE) + sizeof(MQTT_TOPIC_SWITCH) + 4*sizeof(MQTT_TOPIC_SEPARATOR) + 2;
-const int MAX_MQTT_PUB_TOPIC_SAMPLE = sizeof(MQTT_TOPIC_BASE) + sizeof(MQTT_TOPIC_STATE) + sizeof(MQTT_TOPIC_SAMPLE) + 4*sizeof(MQTT_TOPIC_SEPARATOR) + 2;
-const int MAX_MQTT_PUB_TOPIC_INFO = sizeof(MQTT_TOPIC_BASE) + sizeof(MQTT_TOPIC_STATE) + sizeof(MQTT_TOPIC_INFO) + 4*sizeof(MQTT_TOPIC_SEPARATOR) + 2;
+#define MAX_MQTT_TOPIC_LEN sizeof(MQTT_TOPIC_BASE) + sizeof(MQTT_TOPIC_STATE) + sizeof(MQTT_TOPIC_SWITCH) + 4*sizeof(MQTT_TOPIC_SEPARATOR) + 2+MAX_NAME_LEN
 
 
 // LORA_CONFIG
@@ -218,9 +245,3 @@ const int MAX_MQTT_PUB_TOPIC_INFO = sizeof(MQTT_TOPIC_BASE) + sizeof(MQTT_TOPIC_
 #define LORA_PORT 8
 #endif
 
-
-//  Round arbitrary data types
-template < typename TOut, typename TIn >
-TOut round2( TIn value ) {
-   return static_cast<TOut>((int)(value * 100 + 0.5) / 100.0);
-}
