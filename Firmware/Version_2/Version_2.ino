@@ -16,7 +16,8 @@
 #include <rom/rtc.h>
 #include <PubSubClient.h>
 
-#include "constDefine.h"
+// The order of the following does matter
+#include "constDefine.h" // includes constant defines like pins, commands, text, etc.
 #include "enums.h"
 #include "src/multiLogger/src/multiLogger.h"
 #include "src/DS3231_RTC/src/DS3231_RTC.h"
@@ -43,8 +44,21 @@ void newLightReading(uint32_t light);
 float powerGetter();
 #endif
 
+//  Round arbitrary data types
+template < typename TOut, typename TIn >
+TOut round2( TIn value ) {
+   return static_cast<TOut>((int)(value * 100 + 0.5) / 100.0);
+}
+
 void logFunc(const char * log, ...);
 void loraDownlink(const char * data, int port, int snr, int rssi);
+
+
+const char * LOG_FILE = DEF_LOG_FILE;
+const char LOG_PREFIX_SERIAL[] = DEF_LOG_PREFIX_SERIAL;
+const char LOG_PREFIX[] = DEF_LOG_PREFIX;
+const char DATA_PREFIX[] = DEF_DATA_PREFIX;
+
 
 Relay relay(RELAY_PIN_S, RELAY_PIN_R);
 
@@ -106,7 +120,7 @@ MQTT mqtt;
 
 
 #ifdef SENSOR_BOARD
-SensorBoard sensorBoard(&Serial); //, &logFunc);
+SensorBoard sensorBoard(&Serial, TEMP_HISTERESIS, HUM_HISTERESIS, LIGHT_HISTERESIS, STD_MIN_LED_WATT, STD_MAX_LED_WATT); //, &logFunc);
 #endif
 
 
@@ -226,14 +240,18 @@ String response = "";
 char mqttTopicPubSwitch[MAX_MQTT_TOPIC_LEN] = {'\0'};
 char mqttTopicPubSample[MAX_MQTT_TOPIC_LEN] = {'\0'};
 char mqttTopicPubInfo[MAX_MQTT_TOPIC_LEN] = {'\0'};
+#ifdef SENSOR_BOARD
+char mqttTopicPubSensorPre[MAX_MQTT_TOPIC_LEN] = {'\0'};
+#define MAX_MQTT_TOPIC_LEN_SENSOR (MAX_MQTT_TOPIC_LEN + 10)
+char mqttTopicPubSensor[MAX_MQTT_TOPIC_LEN_SENSOR] = {'\0'};
+#endif
 
 void (*outputWriter)(bool) = &writeChunks;
 
 /************************ SETUP *************************/
 void setup() {
-  // Load config, an set relay to wished state
-  config.init();  
-  config.load();
+  // Load relay config, an set relay to wished state
+  config.init();
   relay.set(config.getRelayState());
 
   #ifdef USE_SERIAL
@@ -247,6 +265,12 @@ void setup() {
       Serial.begin(SERIAL_SPEED, SERIAL_8N1, -1, 1, false); // FTDI 12Mbaud
     #endif
   #endif
+
+  #ifdef SENSOR_BOARD  
+  config.sbConf = &sensorBoard.config;
+  #endif
+  // Load remaining config
+  config.load();
 
   // At first init the rtc module to get a time behavior
   bool successAll = true;
@@ -1815,6 +1839,9 @@ void mqttSubscribe() {
   snprintf(&mqttTopicPubSwitch[0], MAX_MQTT_TOPIC_LEN, "%s%c%s%c%s%c%s", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR, config.netConf.name, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_STATE, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_SWITCH);
   snprintf(&mqttTopicPubSample[0], MAX_MQTT_TOPIC_LEN, "%s%c%s%c%s%c%s", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR, config.netConf.name, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_STATE, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_SAMPLE);
   snprintf(&mqttTopicPubInfo[0],   MAX_MQTT_TOPIC_LEN, "%s%c%s%c%s%c%s", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR, config.netConf.name, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_STATE, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_INFO);
+  #ifdef SENSOR_BOARD
+  snprintf(&mqttTopicPubSensorPre[0],   MAX_MQTT_TOPIC_LEN, "%s%c%s%c%s%c%s", MQTT_TOPIC_BASE, MQTT_TOPIC_SEPARATOR, config.netConf.name, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_STATE, MQTT_TOPIC_SEPARATOR, MQTT_TOPIC_SENSOR);
+  #endif
 }
 
 /****************************************************
@@ -1933,36 +1960,41 @@ void newTempReading(float temp) {
   obj.clear();
   docSend["temp"] = temp;
   docSend["unit"] = "C";
-  sendSensorReading();
+  sendSensorReading("temp");
 }
 void newHumReading(float humidity) {
   JsonObject obj = docSend.to<JsonObject>();
   obj.clear();
   docSend["hum"] = humidity;
-  docSend["unit"] = "%%";
-  sendSensorReading();
+  docSend["unit"] = "%";
+  sendSensorReading("hum");
 }
 void newPIRReading(bool PIR) {
   JsonObject obj = docSend.to<JsonObject>();
   obj.clear();
   docSend["PIR"] = PIR;
-  sendSensorReading();
+  sendSensorReading("PIR");
 }
 void newLightReading(uint32_t light) {
   JsonObject obj = docSend.to<JsonObject>();
   obj.clear();
   docSend["light"] = light;
   docSend["unit"] = "lux";
-  sendSensorReading();
+  sendSensorReading("light");
 }
 /****************************************************
  * Send sensor data over mqtt
  ****************************************************/
-void sendSensorReading() {
+void sendSensorReading(char * topic) {
   docSend["ts"] = myTime.timestamp().seconds;
   response = "";
   serializeJson(docSend, response);
-  if (mqtt.connected()) mqtt.publish(mqttTopicPubSample, response.c_str());
+  // On auto mode send retained messages
+  if (mqtt.connected()) {
+    // Construct topic
+    snprintf(mqttTopicPubSensor, MAX_MQTT_TOPIC_LEN_SENSOR, "%s%c%s", mqttTopicPubSensorPre, MQTT_TOPIC_SEPARATOR, topic);
+    mqtt.publish(mqttTopicPubSensor, response.c_str(), sensorBoard.autoMode);
+  }
   #ifdef REPORT_VALUES_ON_LIFENESS
   logger.log(response.c_str());
   #endif
