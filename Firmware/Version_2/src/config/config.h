@@ -12,6 +12,7 @@
 #define CONFIG_h
 
 #include <EEPROM.h>
+#include "../../constDefine.h"
 
 #if (ARDUINO >= 100)
 #include "Arduino.h"
@@ -21,6 +22,11 @@
 
 // Include for network config
 #include "../network/src/network.h"
+#include "../time/src/timeHandling.h"
+#ifdef SENSOR_BOARD
+#include "../sensorBoard/sensorBoard.h"
+#endif
+
 
 // Define standard wifis settings such as in the following example
 // In external privateConfig.h. It will be included automatically (see config.cpp) 
@@ -38,9 +44,19 @@
 #define MAX_NAME_LEN MAX_STRING_LEN
 
 #define NAME_START_ADDRESS 0
-#define EEPROM_SIZE sizeof(NetworkConf)+sizeof(MeterConfiguration)+2
 
 #define NO_SERVER "-"
+
+
+
+#ifdef SENSOR_BOARD
+# define EEPROM_SIZE_SENSOR sizeof(SensorBoardConfiguration)
+#else
+# define EEPROM_SIZE_SENSOR 0
+#endif
+
+#define EEPROM_SIZE (sizeof(NetworkConf)+sizeof(MeterConfiguration)+2 + EEPROM_SIZE_SENSOR)
+
 
 // packed required to store in EEEPROM efficiently
 struct __attribute__((__packed__)) MeterConfiguration {
@@ -54,6 +70,7 @@ struct __attribute__((__packed__)) MeterConfiguration {
   char timeServer[MAX_DNS_LEN] = {'\0'};    // Time Server DNS name
   int8_t resetHour = -1;                    // Perform reliability reset (hour)
   int8_t resetMinute = -1;                  // Perform reliability reset (minute) -1 to disable
+  Timestamp energyReset{0,0};               // Time when energy was reset last time
 }; 
 
 class Configuration {
@@ -62,6 +79,7 @@ class Configuration {
     void init();
     void load();
     void store();
+    // bool loadStoreTo(uint32_t address, bool store, uint8_t * data, size_t size);
     void makeDefault(bool resetName=true);
 
     void setName(char * newName);
@@ -80,6 +98,10 @@ class Configuration {
 
     NetworkConf netConf;
     MeterConfiguration myConf;
+    #ifdef SENSOR_BOARD
+    SensorBoardConfiguration *sbConf;
+    void storeSensorBoard();
+    #endif 
 
   private:
     void storeMyConf();

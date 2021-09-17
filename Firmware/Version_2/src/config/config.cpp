@@ -58,6 +58,15 @@ void Configuration::makeDefault(bool resetName) {
   myConf.calV = myConf.calI = 1.0f;
   myConf.energy = 0.0;
   myConf.resetHour = myConf.resetMinute = -1;
+
+  #ifdef SENSOR_BOARD
+  sbConf->tempOffset = 0.0;
+  sbConf->humOffset = 0.0;
+  sbConf->brightness = 1.0;
+  sbConf->lightCal = 1.0;
+  sbConf->minLEDWatt = STD_MIN_LED_WATT;
+  sbConf->maxLEDWatt = STD_MAX_LED_WATT;
+  #endif
 }
 
 
@@ -75,6 +84,11 @@ void Configuration::load() {
 
   EEPROM.get(address, myConf);
   address += sizeof(myConf);
+  
+  #ifdef SENSOR_BOARD
+  EEPROM.get(address, *sbConf);
+  address += sizeof(*sbConf);
+  #endif
   // getRelayState();
 
   // sanity check
@@ -88,8 +102,20 @@ void Configuration::store() {
   address += sizeof(netConf);
   EEPROM.put(address, myConf);
   address += sizeof(myConf);
+  #ifdef SENSOR_BOARD
+  EEPROM.put(address, *sbConf);
+  address += sizeof(*sbConf);
+  #endif
   EEPROM.commit();
 }
+
+#ifdef SENSOR_BOARD
+void Configuration::storeSensorBoard() {
+  uint32_t address = NAME_START_ADDRESS + sizeof(netConf) + sizeof(myConf);
+  EEPROM.put(address, *sbConf);
+  EEPROM.commit();
+}
+#endif
 
 void Configuration::storeMyConf() {
   uint32_t address = NAME_START_ADDRESS + sizeof(netConf);
