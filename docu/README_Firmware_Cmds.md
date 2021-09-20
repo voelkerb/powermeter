@@ -21,6 +21,12 @@ We will further see how to use commands to interface with a PowerMeter.
 | ---------------------------------------------- |----------------------------------------------|
 | ["info"](#info)                                | Get basic information                        |
 | ["switch"](#relay)                             | Switch relay _on_ or _off_                   |
+| ["getPower"](#getting-energy-data)             | Get active, reactive and apparent power      |
+| ["getVoltage"](#getting-energy-data)           | Get current RMS voltage level                |
+| ["getCurrent"](#getting-energy-data)           | Get RMS current                              |
+| ["getEnergy"](#getting-energy-data)            | Get energy in Wh and time period             |
+| ["getPeriod"](#getting-energy-data)            | Get current net frequency                    |
+| ["getPhaseAngle"](#getting-energy-data)        | Get phase angle between voltage and current  |
 | ["mdns"](#name)                                | Set new mDNS and general [PowerMeter] name   |
 | ["addWifi"](#wifi)                             | Add WiFi AP                                  |
 | ["delWifi"](#wifi)                             | Remove WiFi AP                               |
@@ -388,6 +394,33 @@ If you have configured TTN to be accessible via an MQTT server, you can toggle t
 mosquitto_pub -h <ttnLocation>.cloud.thethings.network -d -t '<ttnVerssion>/<yourApplicationID>@ttn/devices/<yourDeviceID>/down/push' -u <yourMqttUser> -P <yourMqttPWD> -m '{"downlinks":[{"f_port": 8,"frm_payload":"AB0200","priority": "NORMAL"}]}' -d
 ```
 The message must be a JSON dictionary in the shown format. The DownLink message is set via the key ```frm_payload``` and must be base64 encoded. 
+
+
+## Getting Energy Data
+To obtain one shot measurements, several commands exist for all kinds of electrical quantities.
+All data is returned as a JSON dict with the command and the measurement's unit.
+
+* ```{"cmd":"getPower"}```\
+Returns active, reactive and apparent power.
+
+* ```{"cmd":"getVoltage"}```\
+Returns RMS voltage level.
+
+* ```{"cmd":"getCurrent"}```\
+Returns RMS current level.
+
+* ```{"cmd":"getEnergy"}```\
+  Returns energy since reset. Includes time span.
+  ```bash
+  Info:{"error":false,"cmd":"getEnergy","energy":1034.259,"unit":"Wh","startTs":1629464739,"start":"08/20/2021 15:05:39.000","days":31}
+  ```
+
+* ```{"cmd":"getPeriod"}```\
+Get current net frequency. Resolution is 8us according to datasheet.
+
+* ```{"cmd":"getPhaseAngle"}```\
+Returns phase angle between voltage and current.
+
 
 
 ## Getting High Frequency Data
