@@ -173,6 +173,12 @@
 #define CMD_LOG_LEVEL "log"
 #define CMD_CALIBRATION "calibration"
 #define CMD_LORA "lora"
+#define CMD_GET_POWER "getPower"
+#define CMD_GET_VOLTAGE "getVoltage"
+#define CMD_GET_CURRENT "getCurrent"
+#define CMD_GET_ENERGY "getEnergy"
+#define CMD_GET_PERIOD "getPeriod"
+#define CMD_GET_PHASE "getPhaseAngle"
 
 #ifdef SENSOR_BOARD
 // Sensor Board commands
