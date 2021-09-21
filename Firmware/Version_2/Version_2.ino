@@ -53,12 +53,10 @@ TOut round2( TIn value ) {
 void logFunc(const char * log, ...);
 void loraDownlink(const char * data, int port, int snr, int rssi);
 
-
 const char * LOG_FILE = DEF_LOG_FILE;
 const char LOG_PREFIX_SERIAL[] = DEF_LOG_PREFIX_SERIAL;
 const char LOG_PREFIX[] = DEF_LOG_PREFIX;
 const char DATA_PREFIX[] = DEF_DATA_PREFIX;
-
 
 Relay relay(RELAY_PIN_S, RELAY_PIN_R);
 

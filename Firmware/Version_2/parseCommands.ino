@@ -337,10 +337,10 @@ void handleJSON() {
     if (checkBusy()) return;
     double energy = stpm34.readActiveEnergy(1);
     docSend["energy"] = config.myConf.energy + energy;
+    docSend["unit"] = "Wh";
     docSend["startTs"] = config.myConf.energyReset.seconds;
     docSend["start"] = myTime.timeStr(config.myConf.energyReset);
     docSend["days"] = (int)(myTime.timestamp().seconds - config.myConf.energyReset.seconds)/(60*60*24);
-    docSend["unit"] = "Wh";
   }
   /*********************** getPeriod COMMAND ****************************/
   // {"cmd": "getPeriod"}
@@ -353,7 +353,7 @@ void handleJSON() {
     docSend["unit"] = "Hz";
   }
   /*********************** getPhaseAngle COMMAND ****************************/
-  // {"cmd": "getPeriod"}
+  // {"cmd": "getPhaseAngle"}
   else if(strcmp(cmd, CMD_GET_PHASE) == 0) {
     if (checkBusy()) return;
     float p1 = 0;
@@ -971,12 +971,13 @@ void handleJSON() {
     config.setEnergy(value);
     // Set time
     config.myConf.energyReset = time;
+    // This also stores time
+    config.store();
     response = "Energy reset to ";
     response += value;
     response += ", @";
     response += myTime.timeStr(time);
     docSend["msg"] = response;
-    
   }
 
   /*********************** Clear Log COMMAND ****************************/
