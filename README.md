@@ -1,13 +1,17 @@
 # PowerMeter
 
-The PowerMeter is a WiFi equipped electricity meter that can switch the connected appliance _on_ and _of_. 
-The development started with hardware [Version 1.0](/Schematic/Version_1). It consists of an ESP8266 microcontroller and a dedicated electricity monitoring chip. As the main idea behind this project was to record voltage and current waveforms at higher frequencies, several drawbacks for this use case were fixed with Hardware [Version 2.0](/Schematic/Version_2). It features a faster microcontroller with 8MB internal storage for data buffering, an RTC for precise sampling and time keeping and a full 16A relay so that high power appliances like dish washers can be switched _on_ and _off_. The USB connection present in [Version 1.0](/Schematic/Version_1) has been removed, but can still be added with an additional extension board.
+The PowerMeter is a WiFi equipped electricity meter which can also switch the connected appliance _on_ and _of_. 
+You can record high-frequency voltage and current waveforms or embedd it into your smart home system using e.g. _MQTT_.
+Further modular add-ons allow to use other wireless connectivity such as LoRaWAN or to embedd other sensors into the housing. 
 
 <p align="center">
-<img src="/docu/figures/Powermeter.jpg" width="600px">
+<img src="/docu/figures/Powermeter.jpg" width="400px">
 </p>
 
-If you are interested in the whole house consumption, see the [SmartMeter](https://github.com/voelkerb/smartmeter) instead.
+If you are interested in gathering the whole-house energy consumption, see the [SmartMeter](https://github.com/voelkerb/smartmeter) instead.
+
+## Hardware Version _1_ vs _2_
+The development started with hardware [Version 1.0](/Schematic/Version_1). It consists of an ESP8266 microcontroller and a dedicated electricity monitoring chip. As the main idea behind this project was to record voltage and current waveforms at higher frequencies, several drawbacks for this use case were fixed with Hardware [Version 2.0](/Schematic/Version_2). It features a faster microcontroller with 8MB internal storage for data buffering, an RTC for precise sampling and time keeping and a full 16A relay so that high-power appliances like dish washers can be switched _on_ and _off_. The USB connection present in [Version 1.0](/Schematic/Version_1) has been removed, but can still be added with an additional extension board.
 
 ## Why to use?
 It's open source, easy to use, easy to build and offers lots of flexibility. 
@@ -19,7 +23,7 @@ The hardware is...
 * rather cheap (all components sum up to around 30€).
 
 The firmware supports...
-* existing 2.4GHz WPA2 networks or can create its own network .
+* existing 2.4GHz WPA2 networks or can create its own network.
 * to receive commands via USB, TCP or MQTT.
 * to store the configuration in the internal non volatile memory.
 * to provide data at sampling rates from 1/5Hz all the way up to 8kHz.
