@@ -9,7 +9,7 @@
 // #define LORA_WAN
 
 // Does the meter have a SENSOR board connected to the expansion header?
-#define SENSOR_BOARD
+// #define SENSOR_BOARD
 
 
 // Version string
@@ -250,4 +250,3 @@
 #ifndef LORA_PORT
 #define LORA_PORT 8
 #endif
-
