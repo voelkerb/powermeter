@@ -1139,7 +1139,7 @@ void writeDataMQTT(bool tail) {
     objSample["unit"] = unitStr;
     objSample["ts"] = myTime.timestamp().seconds;
     ringBuffer.read((uint8_t*)&values[0], streamConfig.measurementBytes);
-    JsonArray array = docSend.createNestedArray("values");
+    JsonArray array = docSample.createNestedArray("values");
     for (int i = 0; i < streamConfig.numValues; i++) array.add(values[i]);
     response = "";
     serializeJson(docSample, response);

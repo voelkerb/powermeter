@@ -468,7 +468,7 @@ void handleJSON() {
       }
       set = true;
       // Staticpattern needs special treatment
-      if (pattern == LEDPattern::staticPattern) sensorBoard.setColor(colors[0], duration);
+      if (pattern == LEDPattern::staticPattern) sensorBoard.setColor(colors[0], duration, true);
       else sensorBoard.newLEDPattern(pattern, duration, colors[0], colors[1]);
     }
     if (!set) {
@@ -1124,7 +1124,7 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
       // Get ts of the retained command
       unsigned long ts = info[1].as<unsigned long>();
       // If request was longer than 1minute in past
-      if (abs(myTime.timestamp().seconds - ts) > 60) {
+      if (abs((long)(myTime.timestamp().seconds - ts)) > 60) {
         response = "Switch message too old: ";
         response += myTime.timeStr(ts, false);
         mqtt.publish(mqttTopicPubInfo, response.c_str());
@@ -1159,9 +1159,9 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
     } else {
 
     }
-    handleJSON();
-
     JsonObject object = docSend.as<JsonObject>();
+    object.clear();
+    handleJSON();
     if (object.size()) {
       response = "";
       serializeJson(docSend, response);
