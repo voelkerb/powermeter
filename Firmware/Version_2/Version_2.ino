@@ -1983,7 +1983,7 @@ void newLightReading(uint32_t light) {
 /****************************************************
  * Send sensor data over mqtt
  ****************************************************/
-void sendSensorReading(char * topic) {
+void sendSensorReading(const char * topic) {
   docSend["ts"] = myTime.timestamp().seconds;
   response = "";
   serializeJson(docSend, response);

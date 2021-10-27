@@ -451,7 +451,7 @@ void handleJSON() {
       LEDPattern pattern = (LEDPattern)patternInt;
       // Standard colors for fg and bg
       CRGB colors[2] = {COLOR_GREY, COLOR_BLACK};
-      char * names[2] = {"fgColor","bgColor"};
+      const char * names[2] = {"fgColor","bgColor"};
       for (int n = 0; n < 2; n++) {
         // Get fg color if passed
         JsonVariant colorVariant = root[names[n]];
