@@ -6,10 +6,10 @@
 
 
 // Does the meter have a LoRaWAN module connected to the expansion header?
-// #define LORA_WAN
+#define LORA_WAN
 
 // Does the meter have a SENSOR board connected to the expansion header?
-#define SENSOR_BOARD
+// #define SENSOR_BOARD
 
 
 // Version string

@@ -648,8 +648,8 @@ void sendStatusLoRa() {
   values[2] = round2<float>(stpm34.readRMSCurrent(1)/1000.0);
   // TODO: Something is still wrong with voltage calculation
   values[3] = round2<float>(stpm34.readRMSVoltage(1));
-  // unit is watt hours and we want kwh
-  values[4] = (float)(config.myConf.energy + stpm34.readActiveEnergy(1))/1000.0;
+  // unit is watt hours
+  values[4] = (float)(config.myConf.energy + stpm34.readActiveEnergy(1));
   // Unlock stpm 
   xSemaphoreGive(stpm_mutex);
 
