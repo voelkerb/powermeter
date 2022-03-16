@@ -6,7 +6,7 @@
 
 
 // Does the meter have a LoRaWAN module connected to the expansion header?
-#define LORA_WAN
+// #define LORA_WAN
 
 // Does the meter have a SENSOR board connected to the expansion header?
 // #define SENSOR_BOARD
@@ -179,6 +179,7 @@
 #define CMD_GET_ENERGY "getEnergy"
 #define CMD_GET_PERIOD "getPeriod"
 #define CMD_GET_PHASE "getPhaseAngle"
+#define CMD_PUBLISH_INTV "publishInterval"
 
 #ifdef SENSOR_BOARD
 // Sensor Board commands

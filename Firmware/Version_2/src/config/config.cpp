@@ -17,10 +17,15 @@ Configuration::Configuration() {
   snprintf(myConf.mqttServer, MAX_DNS_LEN, NO_SERVER);
   snprintf(myConf.streamServer, MAX_DNS_LEN, NO_SERVER);
   snprintf(myConf.timeServer, MAX_DNS_LEN, NO_SERVER);
+  snprintf(myConf.mqttUser, MAX_STRING_LEN, NO_SERVER);
+  snprintf(myConf.mqttUser, MAX_STRING_LEN, "\0");
+  snprintf(myConf.mqttPwd, MAX_STRING_LEN, "\0");
   myConf.relayState = false;
   myConf.calV = myConf.calI = 1.0;
   myConf.energy = 0.0;
   myConf.resetHour = myConf.resetMinute = -1;
+  myConf.energyPublishInterval = 5.0;
+  myConf.mqttPort = 1883;
 }
 
 void Configuration::init() {
@@ -38,6 +43,9 @@ void Configuration::makeDefault(bool resetName) {
   snprintf(myConf.mqttServer, MAX_DNS_LEN, NO_SERVER);
   snprintf(myConf.streamServer, MAX_DNS_LEN, NO_SERVER);
   snprintf(myConf.timeServer, MAX_DNS_LEN, "time.google.com");
+  snprintf(myConf.mqttUser, MAX_STRING_LEN, "\0");
+  snprintf(myConf.mqttPwd, MAX_STRING_LEN, "\0");
+  myConf.mqttPort = 1883;
 
   for (size_t i = 0; i < MAX_WIFI_APS; i++) {
     sprintf(&netConf.SSIDs[i][0], NO_SERVER);
@@ -57,6 +65,7 @@ void Configuration::makeDefault(bool resetName) {
 
   myConf.calV = myConf.calI = 1.0f;
   myConf.energy = 0.0;
+  myConf.energyPublishInterval = 5.0;
   myConf.resetHour = myConf.resetMinute = -1;
 
   #ifdef SENSOR_BOARD
@@ -205,8 +214,11 @@ void Configuration::storeWiFi() {
 }
 
 
-void Configuration::setMQTTServerAddress(char * serverAddress) {
+void Configuration::setMQTTServer(char * serverAddress, uint16_t port, char * user, char * pwd) {
   snprintf(myConf.mqttServer, MAX_DNS_LEN, serverAddress);
+  snprintf(myConf.mqttUser, MAX_STRING_LEN, user);
+  snprintf(myConf.mqttPwd, MAX_STRING_LEN, pwd);
+  myConf.mqttPort = port; 
   storeMyConf();
 }
 

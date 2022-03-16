@@ -729,17 +729,59 @@ void handleJSON() {
     initMDNS();
   }
 
+  /*********************** Energy publish interval COMMAND ****************************/
+  // e.g. {"cmd":"publishInterval","intv":0}
+  else if (strcmp(cmd, CMD_PUBLISH_INTV) == 0) {
+    if (checkBusy()) return;
+    JsonVariant int_variant = root["intv"];
+    if (int_variant.isNull()) {
+      docSend["msg"] = "Missing \"intv\"";
+      return;
+    }
+    // test if intv is within bounds
+    float intv = root["intv"].as<float>();
+    if (intv != -1) {
+      if (intv < 0.01f || intv > 3600.0f) {
+        docSend["msg"] = "Intv must be > 0.01 & <= 3600; -1 to disable";
+        return;
+      }
+    }
+    // Store
+    config.myConf.energyPublishInterval = intv;
+    response = "Disabled energy data broadcast";
+    if (config.myConf.energyPublishInterval >= 0) {
+       response = "Broadcast energy data each: ";
+       response += intv;
+    }
+    docSend["msg"] = response;
+    config.store();
+  }
+
   /*********************** MQTT Server COMMAND ****************************/
   // e.g. {"cmd":"mqttServer", "payload":{"server":"<ServerAddress>"}}
   else if (strcmp(cmd, CMD_MQTT_SERVER) == 0) {
     if (checkBusy()) return;
     const char* newServer = docRcv["payload"]["server"];
+    JsonVariant int_variant = root["payload"]["port"];
+    const char* user_null = docRcv["payload"]["user"];
+    const char* pwd_null = docRcv["payload"]["pwd"];
     if (newServer == nullptr) {
       docSend["msg"] = F("MQTTServer address required in payload with key server");
       return;
     }
-    if (strlen(newServer) < MAX_IP_LEN) {
-      config.setMQTTServerAddress((char * )newServer);
+    uint16_t port = DEFAULT_MQTT_PORT;
+    if (!int_variant.isNull()) {
+      port = root["payload"]["port"].as<uint16_t>();
+    }
+    char* on_null = (char *)"\0";
+    char * user = on_null;
+    char * pwd = on_null;
+    if (user_null != nullptr) user = (char*)user_null;
+    if (pwd_null != nullptr) pwd = (char*)pwd_null;
+    if (strlen(newServer) < MAX_IP_LEN 
+        && strlen(user) < MAX_STRING_LEN
+        && strlen(pwd) < MAX_STRING_LEN) {
+      config.setMQTTServer((char *)newServer, port, user, pwd);
     } else {
       response = F("MQTTServer address too long, only string of size ");
       response += MAX_IP_LEN;
@@ -753,9 +795,15 @@ void handleJSON() {
     //docSend["msg"] = snprintf( %s", name);
     docSend["msg"] = response;
     docSend["mqtt_server"] = address;
+    docSend["user"] = user;
+    docSend["pwd"] = pwd;
     mqtt.disconnect();
-    mqtt.init(config.myConf.mqttServer, config.netConf.name);
-    mqtt.connect();
+    mqtt.init(config.myConf.mqttServer, 
+              config.myConf.mqttPort, 
+              config.netConf.name, 
+              config.myConf.mqttUser, 
+              config.myConf.mqttPwd);
+    docSend["connected"] = mqtt.connect();
   }
   /*********************** Stream Server COMMAND ****************************/
   // e.g. {"cmd":"streamServer", "payload":{"server":"<ServerAddress>"}}

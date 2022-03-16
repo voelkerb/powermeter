@@ -71,6 +71,10 @@ struct __attribute__((__packed__)) MeterConfiguration {
   int8_t resetHour = -1;                    // Perform reliability reset (hour)
   int8_t resetMinute = -1;                  // Perform reliability reset (minute) -1 to disable
   Timestamp energyReset{0,0};               // Time when energy was reset last time
+  float energyPublishInterval = 5.0;
+  char mqttUser[MAX_STRING_LEN] = {'\0'};   // MQTT User name
+  char mqttPwd[MAX_STRING_LEN] = {'\0'};    // MQTT password
+  uint16_t mqttPort = 1883;                 // MQTT port
 }; 
 
 class Configuration {
@@ -88,7 +92,7 @@ class Configuration {
     bool removeWiFi(char * ssid);
     void loadWiFi();
     void storeWiFi();
-    void setMQTTServerAddress(char * serverAddress);
+    void setMQTTServer(char * serverAddress, uint16_t port, char * user, char * pwd);
     void setStreamServerAddress(char * serverAddress);
     void setTimeServerAddress(char * serverAddress);
     bool getRelayState();

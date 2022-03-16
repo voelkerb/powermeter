@@ -230,6 +230,7 @@ bool updating = false;
 
 // Command stuff send over what ever
 char command[COMMAND_MAX_SIZE] = {'\0'};
+char command2[COMMAND_MAX_SIZE] = {'\0'};
 StaticJsonDocument<2*COMMAND_MAX_SIZE> docRcv;
 StaticJsonDocument<2*COMMAND_MAX_SIZE> docSend;
 StaticJsonDocument<COMMAND_MAX_SIZE> docSample;
@@ -321,6 +322,7 @@ void setup() {
   // Setup STPM 32
   bool successSTPM = stpm34.init();
   stpm34._logFunc = &logFunc;
+  mqtt.logFunc = &logFunc;
 
   stpm34.setCalibration(config.myConf.calV, config.myConf.calI);
   if (!successSTPM) logger.log(ERROR, "STPM Init Failed");
@@ -377,7 +379,13 @@ void setup() {
   response.reserve(2*COMMAND_MAX_SIZE);
 
   // Set mqtt and callbacks
-  mqtt.init(config.myConf.mqttServer, config.netConf.name);
+  // mqtt.init(config.myConf.mqttServer, config.netConf.name);
+  mqtt.init(config.myConf.mqttServer, 
+            config.myConf.mqttPort, 
+            config.netConf.name, 
+            config.myConf.mqttUser, 
+            config.myConf.mqttPwd);
+    
   mqtt.onConnect = &onMQTTConnect;
   mqtt.onDisconnect = &onMQTTDisconnect;
   mqtt.onMessage = &mqttCallback;
@@ -552,8 +560,8 @@ void onIdle() {
   #endif
 
   // Update stuff over mqtt
-  if (mqtt.connected()) {
-    if (millis() - mqttUpdate > MQTT_UPDATE_INTERVAL) {
+  if (mqtt.connected() && config.myConf.energyPublishInterval != -1) {
+    if (millis() - mqttUpdate > (config.myConf.energyPublishInterval*1000)) {
       mqttUpdate = millis();
       sendStatus(false, true);
     }
@@ -689,8 +697,8 @@ void sendStatus(bool viaLogger, bool viaMQTT) {
     docSend["current"] = value;
   }
   // unit is watt hours and we want kwh
-  value = round2<float>(float(config.myConf.energy + stpm34.readActiveEnergy(1))/1000.0);
-  // value = round2<float>(float(config.myConf.energy + stpm34.readActiveEnergy(1)));
+  // value = round2<float>(float(config.myConf.energy + stpm34.readActiveEnergy(1))/1000.0);
+  value = round2<float>(float(config.myConf.energy + stpm34.readActiveEnergy(1)));
   docSend["energy"] = value;
   // TODO: Something is still wrong with voltage calculation
   value = round2<float>(stpm34.readRMSVoltage(1));
@@ -760,6 +768,7 @@ void sendDeviceInfo(Stream * sender) {
   #ifdef SENSOR_BOARD
   docSend["sensors"] = sensorBoard.active;
   #endif
+  docSend["MAC"] = WiFi.macAddress();
   response = "";
   serializeJson(docSend, response);
   response = LOG_PREFIX + response;
