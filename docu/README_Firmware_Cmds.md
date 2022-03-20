@@ -44,10 +44,11 @@ We will further see how to use commands to interface with a PowerMeter.
 | ["clearLog"](#log)                             | Clear logs                                   |
 | ["getLog"](#log)                               | Returns all warning and error log messages   |
 | ["mqttServer"](#mqtt)                          | Set MQTT server                              |
+| ["publishInterval"](#mqtt)                     | Publish interval for data over MQTT          |
 | ["streamServer"](#using-a-stream-server)       | Set stream server                            |
 | ["ntp"](#time-synchronization)                 | Trigger NTP sync                             |
 | ["timeServer"](#time-synchronization)          | Set time server for NTP                      |
-| ["lora"](#lora)                                | Interface with the LoRaWAN module            |
+| ["lora"](#lorawan)                             | Interface with the LoRaWAN module            |
 | ["sensorBoardInfo"](#sensorboard)              | Get info and config of sensor board          |
 | ["getSensors"](#getting-sensor-values)         | Get sensor reading of all sensors            |
 | ["getHum"](#getting-sensor-values)             | Get humidity level                           |
@@ -158,8 +159,15 @@ Info:{"error":false,"msg":"Removed SSID: Test","ssids":"[energywifi]"}
 
 ## MQTT
 Once connected to an MQTT server, the PowerMeter will publish the current power consumption each 5 seconds and each state change of the relay. 
-To set the MQTT server, use the command: ```{"cmd":"mqttServer", "payload":{"server":"<ServerAddress>"}}```
-Currently, only the MQTT standard server port ```1883``` is supported. 
+To set the MQTT server, use the command: 
+```bash
+{"cmd":"mqttServer", "payload":{"server":"<ServerAddress>, "user":<user>, "pwd":<pwd>, "port":<port>"}}
+```
+  
+```<ServerAddress>```: IP of broker - "-" to disable MQTT\
+```<user>```: [Optional] User name of authentification - standard None\
+```<pwd>```: [Optional] PWD of authentification - standard None\
+```<port>```: [Optional] Port of the TCP connection - standard 1883\
 ```bash
 Info:[I]03/02 11:38:42: MQTT connected to 192.168.0.13
 Info:[I]03/02 11:38:42: Subscribing to: powermeter/+
@@ -167,6 +175,15 @@ Info:[I]03/02 11:38:42: Subscribing to: powermeter/powermeterX/+
 Info:{"error":false,"msg":"Set MQTTServer address to: 192.168.0.13","mqtt_server":"192.168.0.13"}
 ```
 
+### Publish Interval
+To set the interval that data is published over MQTT use: 
+```bash
+{"cmd":"publishInterval","intv":<intv>}
+```
+```<intv>```: the time in seconds (float) data is published automatically, -1 to disable autopublish
+
+  
+  
 NOTE: In sampling mode, MQTT is disabled for performance reason.
 
 
@@ -210,7 +227,7 @@ Mqtt can also be used to send any command. Special topics are used to switch the
 * You can also send any command, which can be sent over a bare TCP connection using topic ```powermeter/<name>/cmd```
   ```bash
   mosquitto_pub -h 192.168.0.13 -t 'powermeter/powermeter27/cmd' -m '{"cmd":"switch","payload":{"value":"false"}}'
-  ````
+  ```
 * If you have multiple PowerMeters and want to send the message to all at the same time (e.g. to change some global settings such as the MQTT broker), you can simple ditch the specific PowerMeter name and all will answer. 
   ```bash
   powermeter/sample p
