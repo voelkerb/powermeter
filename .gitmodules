@@ -56,8 +56,8 @@
 	url = https://github.com/voelkerb/ESP.timeHandling
 [submodule "Firmware/Version_2/src/LoRaWAN_AT"]
 	path = Firmware/Version_2/src/LoRaWAN_AT
-	url = git@github.com:voelkerb/LoRaWAN_AT.git
+	url = https://github.com/voelkerb/LoRaWAN_AT
 	update = merge
 [submodule "ext/sensorBoard"]
 	path = ext/sensorBoard
-	url = git@github.com:voelkerb/powermeter.sensorboard.git
+	url = https://github.com/voelkerb/powermeter.sensorboard

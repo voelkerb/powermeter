@@ -118,7 +118,7 @@ MQTT mqtt;
 
 
 #ifdef SENSOR_BOARD
-SensorBoard sensorBoard(&Serial, TEMP_HISTERESIS, HUM_HISTERESIS, LIGHT_HISTERESIS, STD_MIN_LED_WATT, STD_MAX_LED_WATT); //, &logFunc);
+SensorBoard sensorBoard(&Serial, TEMP_HISTERESIS, HUM_HISTERESIS, LIGHT_HISTERESIS, STD_MIN_LED_WATT, STD_MAX_LED_WATT);//, &logFunc);
 #endif
 
 
@@ -2177,7 +2177,10 @@ void setupOTA() {
   ArduinoOTA.onError([](ota_error_t error) {
     #ifdef SERIAL_LOGGER
     Serial.printf("Error[%u]: ", error);
-    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+    if (error == OTA_AUTH_ERROR) {
+      Serial.println("Auth Failed");
+      return;
+    }
     else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
     else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
     else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
