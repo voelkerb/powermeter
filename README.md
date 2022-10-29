@@ -5,8 +5,13 @@ You can record high-frequency voltage and current waveforms or embedd it into yo
 Further modular add-ons allow to use other wireless connectivity such as LoRaWAN or to embedd other sensors into the housing. 
 
 <p align="center">
-<img src="/docu/figures/Powermeter.jpg" width="400px">
+<img src="/docu/figures/Powermeter.jpg" width="200px">
 </p>
+
+### Clone this repo with
+```bash
+git clone --recurse-submodules git@github.com:voelkerb/powermeter.git
+```
 
 If you are interested in gathering the whole-house energy consumption, see the [SmartMeter](https://github.com/voelkerb/smartmeter) instead.
 
