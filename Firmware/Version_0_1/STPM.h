@@ -14,7 +14,7 @@
 #define STPM_h
 
 #include <SPI.h>
-#include "STPM_DEFINE.h"
+#include "STPM_define.h"
 
 #if (ARDUINO >= 100)
 #include "Arduino.h"
