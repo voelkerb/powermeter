@@ -1,8 +1,8 @@
 # PowerMeter
 
-The PowerMeter is a WiFi equipped electricity meter which can also switch the connected appliance _on_ and _of_. 
-You can record high-frequency voltage and current waveforms or embedd it into your smart home system using e.g. _MQTT_.
-Further modular add-ons allow to use other wireless connectivity such as LoRaWAN or to embedd other sensors into the housing. 
+The PowerMeter is a WiFi-enabled electricity meter that can also control the connected appliance’s power status.
+It enables the recording of high-frequency voltage and current waveforms or integration into smart home systems via protocols such as _MQTT_.
+Additional modular components facilitate the integration of other wireless connectivity options, including LoRaWAN, and the embedding of additional sensors within the housing. 
 
 <p align="center">
 <img src="/docu/figures/Powermeter.jpg" width="200px">
@@ -13,10 +13,10 @@ Further modular add-ons allow to use other wireless connectivity such as LoRaWAN
 git clone --recurse-submodules git@github.com:voelkerb/powermeter.git
 ```
 
-If you are interested in gathering the whole-house energy consumption, see the [SmartMeter](https://github.com/voelkerb/smartmeter) instead.
+If you are interested in gathering the entire house energy consumption, please refer to the [SmartMeter](https://github.com/voelkerb/smartmeter) instead.
 
 ## Hardware Version _1_ vs _2_
-The development started with hardware [Version 1.0](/Schematic/Version_1). It consists of an ESP8266 microcontroller and a dedicated electricity monitoring chip. As the main idea behind this project was to record voltage and current waveforms at higher frequencies, several drawbacks for this use case were fixed with Hardware [Version 2.0](/Schematic/Version_2). It features a faster microcontroller with 8MB internal storage for data buffering, an RTC for precise sampling and time keeping and a full 16A relay so that high-power appliances like dish washers can be switched _on_ and _off_. The USB connection present in [Version 1.0](/Schematic/Version_1) has been removed, but can still be added with an additional extension board.
+The development commenced with hardware [version 1.0](Schematic/Version_1). It comprises an ESP8266 microcontroller and a dedicated electricity monitoring chip. As the primary objective of this project was to record voltage and current waveforms at elevated frequencies, several limitations associated with this application were addressed in hardware [version 2.0](Schematic/Version_2). This version features a more powerful microcontroller with 8MB of internal storage for data buffering, an RTC for precise sampling and timekeeping, and a full 16A relay, enabling the control of high-power appliances such as dishwashers. The USB connection present in hardware [version 1.0](Schematic/Version_1) has been eliminated, but could be reintroduced with an additional extension board.
 
 ## Why to use?
 It's open source, easy to use, easy to build and offers lots of flexibility. 
@@ -38,43 +38,45 @@ The firmware supports...
 
 
 ## How to build one?
-You want to build your own PowerMeter? As the PCBs are provided in this repo, you can simply make your own.
+Are you interested in constructing your own PowerMeter? Since the PCBs are provided in this repository, you can simply assemble your own.
 
-Depending on your requirements, you might either build [Version 1.0](/Schematic/Version_1) or [Version 2.0](/Schematic/Version_2). 
-* [Version 1.0](/Schematic/Version_1) features an ESP8266 microcontroller and a 10A solid state relay.
-    * Benefits: 
-        * The parts are cheaper (around 30€).
-        * It comes with a USB interface for uploading the firmware or streaming data
-    * Drawbacks:
-        * Non-modular.
-        * The 10A relay can only switch connected appliances with a maximum power consumption of <2300 Watt.
+Depending on your specific requirements, you may choose to build either [Version 1.0](/Schematic/Version_1) or [Version 2.0](/Schematic/Version_2).
+* [Version 1.0](/Schematic/Version_1) incorporates an ESP8266 microcontroller and a 10A solid-state relay.
+    * Advantages:
+        * The components are more cost-effective (approximately 30€).
+        * It includes a USB interface for uploading the firmware or streaming data.
+    * Disadvantages:
+        * It lacks modularity.
+        * The 10A relay can only switch connected appliances with a maximum power consumption of less than 2300 Watt.
 * [Version 2.0](/Schematic/Version_2) features an ESP32 microcontroller and a 16A bistable relay.
-    * Benefits: 
-        * You can switch appliances with up to 3600Watt. 
-        * You have multi-core microcontroller that also supports Bluetooth.
-        * 8MB of internal storage allows to buffer data. If you stream high frequency data at e.g. 2kHz, this can hold up to 500s of data on network dropouts.
-        * An RTC keeps track of time allowing you to synchronize sampling rates during high frequency sampling.
-        * Extendable by stacking other modules on an extension header. 
-    * Drawbacks:
-        * A little bit more expensive (parts around 35€).
+    * Advantages:
+        * You can switch appliances with a maximum power consumption of up to 3600 Watt.
+        * It possesses a multi-core microcontroller that also supports Bluetooth.
+        * 8MB of internal storage enables data buffering. If you stream high-frequency data at, for instance, 2kHz, this can accommodate up to 500s of data during network interruptions.
+        * An RTC maintains timekeeping, allowing you to synchronize sampling rates during high-frequency sampling.
+        * It can be extended by stacking additional modules on an extension header.
+    * Disadvantages:
+        * The cost of the components is slightly higher (approximately 35€).
 
 Steps to build your own PowerMeter:
-1. Make the PCB ([Version 1.0](/Schematic/Version_1) or [Version 2.0](/Schematic/Version_2)). I recommend to use [JLC](https://jlcpcb.com) as it is super cheap and the quality is still decent.
-2. Buy the parts listed under [BOM](/BOM).
-3. Solder everything together. We used a small reflow oven, but it could also be done using a fine soldering iron. 
-4. Buy a matching housing. We highly recommend to use [this one](https://www.conrad.de/de/p/bopla-eletec-se-432-de-cee-stecker-gehaeuse-120-x-65-x-50-abs-polycarbonat-lichtgrau-graphitgrau-1-st-522228.html) as the PCB was specially designed for it, the mounting holes match, and it is safe to use with 230V. We also experimented with custom 3D prints (see [CAD](/CAD)) but it's at your own risk to do so. 
-5. Wire the PowerMeters using the following diagram. 
+
+1. Create the PCB ([version 1.0](/Schematic/Version_1)) or [version 2.0](/Schematic/Version_2))). We recommend using [JLC PCB](https://jlcpcb.com) because it’s very affordable and the quality is still good.
+2. Purchase the components listed in the [BOM](/BOM) (Bill of Materials).
+3. Solder everything together. We used a small reflow oven, but a fine soldering iron could also be used.
+4. Buy a matching housing. We highly recommend using [this one](https://www.conrad.de/de/p/bopla-eletec-se-432-de-cee-stecker-gehaeuse-120-x-65-x-50-abs-polycarbonat-lichtgrau-graphitgrau-1-st-522228.html) because the PCB was specially designed for it, the mounting holes match, and it’s safe to use with 230V. We also tried custom 3D prints (see [CAD](/CAD)), but it’s at your own risk.
+
+5. Wire the PowerMeters using the provided diagram. 
 
 <img src="/docu/figures/socket.png">
 
 6. Upload the [firmware](/Firmware) according to the instructions for your version. 
-7. Interface with the PowerMeter accordingly as stated [here](/docu/README_Firmware_Cmds.md) 
+7. Interface with the PowerMeter according to the protocol documented [here](/docu/README_Firmware_Cmds.md) 
 
 # Use cases
 ## Smart homes
 There are plenty of use cases for a smart plug inside a smart home.
 * Switch appliances _on_ and _off_ using a voice assistant or your smartphone
-* Include it in home automation software to switch appliances based on an automation. There are lots of possibilities here, e.g.: 
+* Include it in home automation software to switch appliances based on automations, e.g.: 
     * Switch appliances _on_ and _off_ by time of day.
     * Switch appliances _off_ automatically at standby consumption.
     * Trigger an alert if the consumption exceeds a limit.
