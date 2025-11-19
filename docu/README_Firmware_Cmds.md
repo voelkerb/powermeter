@@ -95,7 +95,7 @@ Info:{"error":false,"msg":"Switching: On"}
 Restarts the [PowerMeter]. The TCP connection will be lost.
 
 You can also trigger the module to automatically reset at a particular time (```<hour>:<minute>:00```) each day for maintenance reason. Use ```<hour> = <minute> = -1``` to disable.\
-```{"cmd":"restartDaily","hour":<hour>,"minute":<minute>}```
+```{"cmd":"dailyRestart","hour":<hour>,"minute":<minute>}```
 
 ## Reset
 ```{"cmd":"factoryReset"}```\
