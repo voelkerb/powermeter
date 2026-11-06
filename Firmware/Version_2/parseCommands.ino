@@ -14,7 +14,7 @@ void handleEvent(Stream * getter) {
     return;
   }
   #ifdef DEBUG_DEEP
-  logger.log(INFO, command);
+  logger.log(INFO, "%s", command);
   #endif
 
   newGetter = getter;
@@ -69,6 +69,16 @@ bool parseCommand() {
   }
   //docSend.clear();
   return true;
+}
+
+/****************************************************
+ * True if the stream is one of our connected tcp clients
+ ****************************************************/
+bool isTcpClient(Stream * getter) {
+  for (size_t i = 0; i < MAX_CLIENTS; i++) {
+    if (getter == (Stream*)&client[i]) return true;
+  }
+  return false;
 }
 
 /****************************************************
@@ -156,6 +166,10 @@ void handleJSON() {
       outputWriter = &writeDataMQTT;
     // e.g. {"cmd":"sample", "payload":{"type":"TCP", "rate":4000}}
     } else if (strcmp(typeC, "TCP") == 0) {
+      if (!isTcpClient(newGetter)) {
+        docSend["msg"] = F("TCP sampling requires the command to be sent over tcp");
+        return;
+      }
       sendClient = (WiFiClient*)newGetter;
       sendStream = sendClient; 
       streamConfig.stream = StreamType::TCP;
@@ -165,7 +179,7 @@ void handleJSON() {
     } else if (strcmp(typeC, "UDP") == 0) {
       streamConfig.stream = StreamType::UDP;
       int port = docRcv["payload"]["port"].as<int>();
-      if (port > 80000 || port <= 0) {
+      if (port > 65535 || port <= 0) {
         streamConfig.port = STANDARD_UDP_PORT;
         response = "Unsupported UDP port";
         response += port;
@@ -173,6 +187,10 @@ void handleJSON() {
         return;
       } else {
         streamConfig.port = port;
+      }
+      if (!isTcpClient(newGetter)) {
+        docSend["msg"] = F("UDP sampling requires the command to be sent over tcp");
+        return;
       }
       outputWriter = &writeChunksUDP;
       sendClient = (WiFiClient*)newGetter;
@@ -189,6 +207,8 @@ void handleJSON() {
       }
       if (success) {
         response = F("Connected to TCP stream");
+        sendClient = &streamClient;
+        sendStream = sendClient;
       } else {
         docSend["msg"] = F("Could not connect to TCP stream");
         return;
@@ -269,6 +289,7 @@ void handleJSON() {
       if (delta > 20000 or delta < 500) {
         response += F("//nCannot start sampling in: "); response += delta; response += F("ms");
         streamConfig.countdown = 0;
+        next_state = SampleState::IDLE;
       } else {
         response += F("//nStart sampling in: "); response += delta; response += F("ms");
         streamConfig.countdown = nowMs + delta;
@@ -297,15 +318,15 @@ void handleJSON() {
     }
      // On = 1 , Off = 1, Toogle = -1
     int value = docRcv["payload"]["value"].as<int>();
-    docSend["msg"]["switch"] = value;
     response = "Switching: ";
-    docSend["msg"] = response;
     if (value == 1) response += F("On");
     else if (value == 0) response += F("Off");
     else if (value == -1) {	
       response += relay.state ? F("On") : F("Off");
       value = !relay.state;
     }
+    docSend["msg"] = response;
+    docSend["switch"] = value;
     relay.set(value);
   }
   /*********************** getPower COMMAND ****************************/
@@ -584,6 +605,12 @@ void handleJSON() {
       return;
     }
     long chunk = samples*streamConfig.measurementBytes;
+    if (chunk > MAX_SEND_SIZE) {
+      response = F("Too many samples for one packet, max: ");
+      response += MAX_SEND_SIZE/streamConfig.measurementBytes;
+      docSend["msg"] = response;
+      return;
+    }
     // We don't want to send anything
     JsonObject obj = docSend.to<JsonObject>();
     obj.clear();
@@ -613,7 +640,7 @@ void handleJSON() {
     docSend["start_ts"] = myTime.timestampStr(streamConfig.startTs);
     docSend["stop_ts"] = myTime.timestampStr(streamConfig.stopTs);
     docSend["ip"] = WiFi.localIP().toString();
-    docSend["avg_rate"] = totalSamples/(samplingDuration/1000.0);
+    docSend["avg_rate"] = samplingDuration > 0 ? totalSamples/(samplingDuration/1000.0) : 0.0;
   }
 
   /*********************** LOG LEVEL COMMAND ****************************/
@@ -1040,12 +1067,12 @@ void handleJSON() {
   else if (strcmp(cmd, CMD_GET_LOG) == 0) {
     if (checkBusy()) return;
     spiffsLog.flush();
-    bool hasRow = spiffsLog.nextRow(&command[0]);
+    bool hasRow = spiffsLog.nextRow(&command[0], COMMAND_MAX_SIZE);
     newGetter->printf("%s{\"cmd\":\"log\",\"msg\":\"", &LOG_PREFIX[0]);
     newGetter->printf("*** LOGFile *** //n");
     while(hasRow) {
       newGetter->printf("%s//n", &command[0]);
-      hasRow = spiffsLog.nextRow(&command[0]);
+      hasRow = spiffsLog.nextRow(&command[0], COMMAND_MAX_SIZE);
     }
     newGetter->println("*** LOGFile *** \"}");
   }
@@ -1136,6 +1163,8 @@ bool checkBusy() {
  * topic we subscribed to. See mqttSubscribe function. 
  ****************************************************/
 void mqttCallback(char* topic, byte* message, unsigned int length) {
+  // Never copy more than fits into the command buffer
+  if (length >= COMMAND_MAX_SIZE) length = COMMAND_MAX_SIZE - 1;
   memcpy(&command[0], message, length);
   command[length] = '\0';
   logger.log("MQTT msg on topic: %s: %s", topic, command);
@@ -1162,7 +1191,7 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
       // Obtain switch command and ts
       JsonArray info = docRcv.as<JsonArray>();
       retained = true;
-      if (info.size() != 2 or !info[0].is<char*>() or !info[1].is<long>()) {
+      if (info.size() != 2 or !info[0].is<const char*>() or !info[1].is<long>()) {
         mqtt.publish(mqttTopicPubInfo, "Parse error");
         return;
       }
@@ -1214,7 +1243,7 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
       response = "";
       serializeJson(docSend, response);
       // This might be too long for the logger
-      logger.log(response.c_str());
+      logger.log("%s", response.c_str());
       mqtt.publish(mqttTopicPubInfo, response.c_str());
     }
   } 
@@ -1227,14 +1256,21 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
     docSend["ts"] = myTime.timeStr();
     response = "";
     serializeJson(docSend, response);
-    logger.log(response.c_str());
+    logger.log("%s", response.c_str());
     mqtt.publish(mqttTopicPubInfo, response.c_str());
   }
   // single sample request
   else if(strcmp(topicEnd, MQTT_TOPIC_SAMPLE) == 0) {
     logger.log("MQTT wants sample");
+    // The stpm is exclusively used by the sampling task while sampling
+    if (state != SampleState::IDLE) {
+      mqtt.publish(mqttTopicPubInfo, "Busy sampling");
+      response = "";
+      command[0] = '\0';
+      return;
+    }
     float value = -1.0;
-    char unit[4] = {'\0'};
+    char unit[MAX_UNIT_STR_LENGTH] = {'\0'};
     if(strcmp(command, "v") == 0) {
       value = stpm34.readFundamentalVoltage(1);
       snprintf(unit, MAX_UNIT_STR_LENGTH, "V");
@@ -1263,7 +1299,7 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
     docSend["ts"] = myTime.timeStr();
     response = "";
     serializeJson(docSend, response);
-    logger.log(response.c_str());
+    logger.log("%s", response.c_str());
     mqtt.publish(mqttTopicPubSample, response.c_str());
   }
   response = "";
