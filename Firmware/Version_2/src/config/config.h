@@ -41,7 +41,8 @@
 #define MAX_STRING_LEN 25
 #define MAX_IP_LEN 17
 #define MAX_DNS_LEN 25
-#define MAX_NAME_LEN MAX_STRING_LEN
+// Must fit into NetworkConf::name
+#define MAX_NAME_LEN MAX_DEVICE_NAME_LEN
 
 #define NAME_START_ADDRESS 0
 

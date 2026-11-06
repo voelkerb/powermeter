@@ -26,7 +26,7 @@
 #include "src/relay/src/relay.h"
 #include "src/network/src/network.h"
 #include "src/config/config.h"
-#include "src/sensorBoard/SensorBoard.h"
+#include "src/sensorBoard/sensorBoard.h"
 #include "src/ringbuffer/src/ringbuffer.h"
 #include "src/mqtt/src/mqtt.h"
 #include "src/LoRaWAN_AT/src/LoRaWAN_AT.h"

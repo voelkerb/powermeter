@@ -17,9 +17,8 @@ Configuration::Configuration() {
   snprintf(myConf.mqttServer, MAX_DNS_LEN, NO_SERVER);
   snprintf(myConf.streamServer, MAX_DNS_LEN, NO_SERVER);
   snprintf(myConf.timeServer, MAX_DNS_LEN, NO_SERVER);
-  snprintf(myConf.mqttUser, MAX_STRING_LEN, NO_SERVER);
-  snprintf(myConf.mqttUser, MAX_STRING_LEN, "\0");
-  snprintf(myConf.mqttPwd, MAX_STRING_LEN, "\0");
+  snprintf(myConf.mqttUser, MAX_STRING_LEN, "%s", "");
+  snprintf(myConf.mqttPwd, MAX_STRING_LEN, "%s", "");
   myConf.relayState = false;
   myConf.calV = myConf.calI = 1.0;
   myConf.energy = 0.0;
@@ -43,8 +42,8 @@ void Configuration::makeDefault(bool resetName) {
   snprintf(myConf.mqttServer, MAX_DNS_LEN, NO_SERVER);
   snprintf(myConf.streamServer, MAX_DNS_LEN, NO_SERVER);
   snprintf(myConf.timeServer, MAX_DNS_LEN, "time.google.com");
-  snprintf(myConf.mqttUser, MAX_STRING_LEN, "\0");
-  snprintf(myConf.mqttPwd, MAX_STRING_LEN, "\0");
+  snprintf(myConf.mqttUser, MAX_STRING_LEN, "%s", "");
+  snprintf(myConf.mqttPwd, MAX_STRING_LEN, "%s", "");
   myConf.mqttPort = 1883;
 
   for (size_t i = 0; i < MAX_WIFI_APS; i++) {
@@ -55,9 +54,9 @@ void Configuration::makeDefault(bool resetName) {
 
   // #define in privateConfig
   #ifdef NUM_STANDARD_WIFIS
-  for (int i = 0; i < NUM_STANDARD_WIFIS; i++) {
-    strcpy(netConf.SSIDs[netConf.numAPs], MY_STANDARD_WIFIS[i*2]);
-    strcpy(netConf.PWDs[netConf.numAPs], MY_STANDARD_WIFIS[i*2+1]);
+  for (int i = 0; i < NUM_STANDARD_WIFIS and netConf.numAPs < MAX_WIFI_APS; i++) {
+    snprintf(netConf.SSIDs[netConf.numAPs], MAX_NETWORK_LEN, "%s", MY_STANDARD_WIFIS[i*2]);
+    snprintf(netConf.PWDs[netConf.numAPs], MAX_PWD_LEN, "%s", MY_STANDARD_WIFIS[i*2+1]);
     netConf.numAPs++;
   }
   #endif
@@ -85,7 +84,8 @@ void Configuration::load() {
   EEPROM.get(address, netConf);
   // Spot invalid config
   if (netConf.numAPs > MAX_WIFI_APS) {
-    makeDefault(false);
+    // Nothing valid stored (e.g. fresh flash), also reset the name
+    makeDefault(true);
     store();
     return;
   }
@@ -100,7 +100,21 @@ void Configuration::load() {
   #endif
   // getRelayState();
 
+  // Make sure strings read from flash are terminated
+  netConf.name[MAX_DEVICE_NAME_LEN-1] = '\0';
+  for (size_t i = 0; i < MAX_WIFI_APS; i++) {
+    netConf.SSIDs[i][MAX_NETWORK_LEN-1] = '\0';
+    netConf.PWDs[i][MAX_PWD_LEN-1] = '\0';
+  }
+  myConf.mqttServer[MAX_DNS_LEN-1] = '\0';
+  myConf.streamServer[MAX_DNS_LEN-1] = '\0';
+  myConf.timeServer[MAX_DNS_LEN-1] = '\0';
+  myConf.mqttUser[MAX_STRING_LEN-1] = '\0';
+  myConf.mqttPwd[MAX_STRING_LEN-1] = '\0';
+
   // sanity check
+  if (isnan(myConf.energy)) myConf.energy = 0.0;
+  if (isnan(myConf.energyPublishInterval)) myConf.energyPublishInterval = 5.0;
   if (isnan(myConf.calV) or !myConf.calV or myConf.calV < 0.1 or myConf.calV > 10.0) myConf.calV = 1.0;
   if (isnan(myConf.calI) or !myConf.calI or myConf.calI < 0.1 or myConf.calI > 10.0) myConf.calI = 1.0;
 }
@@ -164,7 +178,7 @@ void Configuration::setRelayState(bool value) {
 
 bool Configuration::removeWiFi(char * ssid) {
   int idx = -1;
-  for (int ap = 0; ap < MAX_WIFI_APS; ap++) {
+  for (int ap = 0; ap < (int)netConf.numAPs; ap++) {
     if (strcmp(ssid, netConf.SSIDs[ap]) == 0) {
       idx = ap;
       break;
@@ -186,7 +200,7 @@ bool Configuration::removeWiFi(char * ssid) {
 
 int Configuration::addWiFi(char * ssid, char * pwd) {
   int idx = -1;
-  for (int ap = 0; ap < MAX_WIFI_APS; ap++) {
+  for (int ap = 0; ap < (int)netConf.numAPs; ap++) {
     if (strcmp(ssid, netConf.SSIDs[ap]) == 0) {
       idx = ap;
       break;
@@ -194,8 +208,8 @@ int Configuration::addWiFi(char * ssid, char * pwd) {
   }
   if (idx != -1) return -1;
   if (netConf.numAPs >= MAX_WIFI_APS) return 0;
-  strcpy(netConf.SSIDs[netConf.numAPs], ssid);
-  strcpy(netConf.PWDs[netConf.numAPs], pwd);
+  snprintf(netConf.SSIDs[netConf.numAPs], MAX_NETWORK_LEN, "%s", ssid);
+  snprintf(netConf.PWDs[netConf.numAPs], MAX_PWD_LEN, "%s", pwd);
   netConf.numAPs++;
   storeWiFi(); // NOTE: a little bit overhead but who cares
   return 1;
@@ -215,25 +229,25 @@ void Configuration::storeWiFi() {
 
 
 void Configuration::setMQTTServer(char * serverAddress, uint16_t port, char * user, char * pwd) {
-  snprintf(myConf.mqttServer, MAX_DNS_LEN, serverAddress);
-  snprintf(myConf.mqttUser, MAX_STRING_LEN, user);
-  snprintf(myConf.mqttPwd, MAX_STRING_LEN, pwd);
+  snprintf(myConf.mqttServer, MAX_DNS_LEN, "%s", serverAddress);
+  snprintf(myConf.mqttUser, MAX_STRING_LEN, "%s", user);
+  snprintf(myConf.mqttPwd, MAX_STRING_LEN, "%s", pwd);
   myConf.mqttPort = port; 
   storeMyConf();
 }
 
 void Configuration::setTimeServerAddress(char * serverAddress) {
-  snprintf(myConf.timeServer, MAX_DNS_LEN, serverAddress);
+  snprintf(myConf.timeServer, MAX_DNS_LEN, "%s", serverAddress);
   storeMyConf();
 }
 
 void Configuration::setStreamServerAddress(char * serverAddress) {
-  snprintf(myConf.streamServer, MAX_DNS_LEN, serverAddress);
+  snprintf(myConf.streamServer, MAX_DNS_LEN, "%s", serverAddress);
   storeMyConf();
 }
 
 void Configuration::setName(char * newName) {
-  snprintf(netConf.name, MAX_DNS_LEN, newName);
+  snprintf(netConf.name, MAX_DEVICE_NAME_LEN, "%s", newName);
   EEPROM.put(NAME_START_ADDRESS, netConf);
   EEPROM.commit();
 }
