@@ -312,22 +312,29 @@ void handleJSON() {
   else if (strcmp(cmd, CMD_SWITCH) == 0) {
     // For switching we need value payload
     JsonVariant payloadValue = root["payload"]["value"];
-    if (payloadValue.isNull()) {
+    // On = 1/true/"true"/"on", Off = 0/false/"false"/"off", Toggle = -1
+    int value = -2;
+    if (payloadValue.is<bool>()) {
+      value = payloadValue.as<bool>() ? 1 : 0;
+    } else if (payloadValue.is<int>()) {
+      value = payloadValue.as<int>();
+    } else if (payloadValue.is<const char*>()) {
+      const char *str = payloadValue.as<const char*>();
+      if (strcmp(str, TRUE_STRING) == 0 or strcmp(str, MQTT_TOPIC_SWITCH_ON) == 0 or strcmp(str, "1") == 0) value = 1;
+      else if (strcmp(str, FALSE_STRING) == 0 or strcmp(str, MQTT_TOPIC_SWITCH_OFF) == 0 or strcmp(str, "0") == 0) value = 0;
+      else if (strcmp(str, "-1") == 0) value = -1;
+    }
+    if (value != 0 and value != 1 and value != -1) {
       docSend["msg"] = F("Not a valid \"switch\" command");
       return;
     }
-     // On = 1 , Off = 1, Toogle = -1
-    int value = docRcv["payload"]["value"].as<int>();
-    response = "Switching: ";
-    if (value == 1) response += F("On");
-    else if (value == 0) response += F("Off");
-    else if (value == -1) {	
-      response += relay.state ? F("On") : F("Off");
-      value = !relay.state;
-    }
-    docSend["msg"] = response;
-    docSend["switch"] = value;
+    if (value == -1) value = !relay.state;
     relay.set(value);
+    response = "Switching: ";
+    response += value ? F("On") : F("Off");
+    docSend["msg"] = response;
+    // Report the requested state
+    docSend["switch"] = (bool)value;
   }
   /*********************** getPower COMMAND ****************************/
   // {"cmd": "getPower"}
